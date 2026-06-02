@@ -1,3 +1,5 @@
+// --- START OF FILE ltx_director.js ---
+
 const { app } = window.comfyAPI.app;
 const { api } = window.comfyAPI.api;
 
@@ -516,6 +518,55 @@ const STYLES = `
   .pr-segment:hover:not(.active) {
     color: #ccc;
   }
+  
+  /* Autocomplete suggestion styles */
+  .pr-autocomplete-menu {
+    position: fixed;
+    background: #181818;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 10000;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    min-width: 180px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .pr-autocomplete-item {
+    background: #252525;
+    color: #aaa;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-family: monospace;
+    cursor: pointer;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: all 0.15s ease;
+  }
+  .pr-autocomplete-item:hover, .pr-autocomplete-item.active {
+    background: #1c222d;
+    color: #4fff8f;
+    border-color: #4fff8f;
+  }
+  .pr-autocomplete-item span {
+    font-weight: bold;
+    font-size: 12px;
+  }
+  .pr-autocomplete-item small {
+    color: #777;
+    font-size: 10px;
+  }
+  .pr-autocomplete-item.active small {
+    color: #4fff8f;
+    opacity: 0.8;
+  }
 `;
 
 if (!document.getElementById("prompt-relay-styles")) {
@@ -712,6 +763,7 @@ class TimelineEditor {
     this.pauseAudio();
     window.removeEventListener("keydown", this.handleKeyDown, true);
     window.removeEventListener("paste", this.handlePaste, true);
+    if (this._autocompleteMenu) { this._autocompleteMenu.remove(); }
   }
 
   getDurationFrames() {
@@ -1025,7 +1077,7 @@ class TimelineEditor {
     // --- Text Area (Image/Text) ---
     this.promptInput = document.createElement("textarea");
     this.promptInput.className = "pr-prompt-area";
-    this.promptInput.placeholder = "Enter prompt for selected segment...";
+    this.promptInput.placeholder = "Enter prompt for selected segment... Type '@' for character shortcuts.";
     this.promptInput.addEventListener("input", () => {
       if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
         this.timeline.segments[this.selectedIndex].prompt = this.promptInput.value;
@@ -1355,6 +1407,146 @@ class TimelineEditor {
     this.wrapper.appendChild(propContainer);
 
     this.container.appendChild(this.wrapper);
+    
+    // --- Initialize autocomplete popup support ---
+    this.setupAutocomplete();
+  }
+
+  // --- Auto-complete Popup Setup ---
+  setupAutocomplete() {
+    const input = this.promptInput;
+    if (!input) return;
+
+    const menu = document.createElement("div");
+    menu.className = "pr-autocomplete-menu";
+    menu.style.display = "none";
+    document.body.appendChild(menu);
+    this._autocompleteMenu = menu;
+
+    const suggestions = [
+      { tag: "@char1", label: "Character 1" },
+      { tag: "@char2", label: "Character 2" },
+      { tag: "@char3", label: "Character 3" },
+      { tag: "@character1", label: "Character 1 (Full)" },
+      { tag: "@character2", label: "Character 2 (Full)" },
+      { tag: "@character3", label: "Character 3 (Full)" }
+    ];
+
+    let activeIndex = 0;
+    let showMenu = false;
+    let queryStart = -1;
+
+    const hideMenu = () => {
+      menu.style.display = "none";
+      showMenu = false;
+    };
+
+    const getCaretCoordinates = () => {
+      const rect = input.getBoundingClientRect();
+      return {
+        left: rect.left,
+        top: rect.bottom + window.scrollY + 2
+      };
+    };
+
+    const updateMenu = () => {
+      if (!showMenu) return;
+      const text = input.value;
+      const cursor = input.selectionStart;
+      const query = text.slice(queryStart + 1, cursor).toLowerCase();
+
+      const filtered = suggestions.filter(s => s.tag.toLowerCase().includes("@" + query) || s.tag.toLowerCase().includes(query));
+      if (filtered.length === 0) {
+        hideMenu();
+        return;
+      }
+
+      menu.innerHTML = "";
+      
+      // Clamp activeIndex inside the filtered results boundaries
+      if (activeIndex >= filtered.length) {
+        activeIndex = 0;
+      }
+
+      filtered.forEach((s, idx) => {
+        const item = document.createElement("div");
+        item.className = "pr-autocomplete-item" + (idx === activeIndex ? " active" : "");
+        item.innerHTML = `<span>${s.tag}</span><small>${s.label}</small>`;
+        
+        item.addEventListener("mousedown", (e) => {
+          e.preventDefault(); // Prevent losing focus on textarea
+          insertSuggestion(s.tag);
+        });
+        menu.appendChild(item);
+      });
+
+      const coords = getCaretCoordinates();
+      menu.style.left = `${coords.left}px`;
+      menu.style.top = `${coords.top}px`;
+      menu.style.display = "flex";
+    };
+
+    const insertSuggestion = (tag) => {
+      const text = input.value;
+      const cursor = input.selectionStart;
+      const before = text.slice(0, queryStart);
+      const after = text.slice(cursor);
+      
+      input.value = before + tag + " " + after;
+      input.selectionStart = input.selectionEnd = queryStart + tag.length + 1;
+      
+      // Trigger input event to save changes in the node data
+      input.dispatchEvent(new Event("input"));
+      hideMenu();
+      input.focus();
+    };
+
+    input.addEventListener("keydown", (e) => {
+      if (showMenu) {
+        const items = menu.querySelectorAll(".pr-autocomplete-item");
+        if (items.length === 0) return;
+
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          activeIndex = (activeIndex + 1) % items.length;
+          updateMenu();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          activeIndex = (activeIndex - 1 + items.length) % items.length;
+          updateMenu();
+        } else if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          const activeItem = items[activeIndex];
+          if (activeItem) {
+            const tag = activeItem.querySelector("span").textContent;
+            insertSuggestion(tag);
+          }
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          hideMenu();
+        }
+      }
+    });
+
+    input.addEventListener("input", () => {
+      const text = input.value;
+      const cursor = input.selectionStart;
+      const textBeforeCursor = text.slice(0, cursor);
+      const lastAt = textBeforeCursor.lastIndexOf("@");
+
+      if (lastAt !== -1 && lastAt >= textBeforeCursor.search(/\s[^\s]*$/)) {
+        showMenu = true;
+        queryStart = lastAt;
+        updateMenu();
+      } else {
+        hideMenu();
+      }
+    });
+
+    input.addEventListener("blur", () => {
+      // Small delay to let mousedown register on menu items before closing
+      setTimeout(hideMenu, 150);
+    });
   }
 
   checkResize() {
@@ -3808,18 +4000,8 @@ app.registerExtension({
           compWidget.value = 18;
         }
 
-        // Hide global prompt by default on creation without destroying its DOM element
-        const globalPromptWidget = this.widgets?.find(w => w.name === "global_prompt");
-        if (globalPromptWidget) {
-          if (!globalPromptWidget.options) globalPromptWidget.options = {};
-          globalPromptWidget.options.hidden = true;
-          globalPromptWidget.hidden = true;
-          globalPromptWidget.computeSize = () => [0, 0];
-          setTimeout(() => {
-            if (globalPromptWidget.element) globalPromptWidget.element.style.display = "none";
-          }, 0);
-        }
-
+        // Global Prompt is now left completely visible on creation!
+        
         const container = document.createElement("div");
         const widget = this.addDOMWidget("timeline_ui", "timeline_ui", container, {
           getValue: () => "",

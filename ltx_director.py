@@ -34,6 +34,42 @@ log = logging.getLogger(__name__)
 GuideData = io.Custom("GUIDE_DATA")
 
 
+def _preprocess_prompts_with_characters(global_prompt, local_prompts, char1="", char2="", char3=""):
+    """Invisibly swaps out @character1/@char1 tags with their high-fidelity VLM descriptions."""
+    gp = global_prompt
+    char1 = char1 if char1 else ""
+    char2 = char2 if char2 else ""
+    char3 = char3 if char3 else ""
+    
+    # Process Global Prompt
+    for tag in ["@character1", "@char1"]:
+        if tag in gp:
+            gp = gp.replace(tag, char1)
+    for tag in ["@character2", "@char2"]:
+        if tag in gp:
+            gp = gp.replace(tag, char2)
+    for tag in ["@character3", "@char3"]:
+        if tag in gp:
+            gp = gp.replace(tag, char3)
+            
+    # Process Local Timeline Prompts
+    locals_list = [p.strip() for p in local_prompts.split("|")] if local_prompts else []
+    processed_locals = []
+    for lp in locals_list:
+        for tag in ["@character1", "@char1"]:
+            if tag in lp:
+                lp = lp.replace(tag, char1)
+        for tag in ["@character2", "@char2"]:
+            if tag in lp:
+                lp = lp.replace(tag, char2)
+        for tag in ["@character3", "@char3"]:
+            if tag in lp:
+                lp = lp.replace(tag, char3)
+        processed_locals.append(lp)
+        
+    return gp, " | ".join(processed_locals)
+
+
 def _format_timeline_to_text(global_prompt, duration_frames, frame_rate, epsilon, 
                              custom_width, custom_height, resize_method,
                              timeline_data, local_prompts, segment_lengths, guide_strength):
@@ -106,7 +142,7 @@ def _format_timeline_to_text(global_prompt, duration_frames, frame_rate, epsilon
                 lines.append(f"Guide Strength: {strength}")
                 lines.append("-" * 40)
                 
-        audio_segs = [s for s in segs if s.get("type") == "audio"]
+        audio_segs = [s for s in segs if s.get("type", "audio") == "audio"]
         audio_segs.sort(key=lambda s: float(s.get("start", 0)))
         if audio_segs:
             lines.append("\n--- Audio Segments ---")
@@ -552,6 +588,11 @@ class LTXDirector(io.ComfyNode):
                 io.Image.Input("reference_image_2", optional=True, tooltip="Second optional reference image."),
                 io.Image.Input("reference_image_3", optional=True, tooltip="Third optional reference image."),
                 io.Float.Input("reference_strength", default=1.0, min=0.0, max=5.0, step=0.05, optional=True, tooltip="Guide strength for the reference images."),
+                
+                # New descriptive inputs for automatic under-the-hood character replacement
+                io.String.Input("char1_description", multiline=True, default="", optional=True, tooltip="Plug in a detailed description for @character1 / @char1. You can write it manually or connect a VLM/Caption node."),
+                io.String.Input("char2_description", multiline=True, default="", optional=True, tooltip="Plug in a detailed description for @character2 / @char2."),
+                io.String.Input("char3_description", multiline=True, default="", optional=True, tooltip="Plug in a detailed description for @character3 / @char3."),
             ],
             outputs=[
                 io.Model.Output(display_name="model"),
@@ -573,7 +614,8 @@ class LTXDirector(io.ComfyNode):
                 custom_width=768, custom_height=512, resize_method="maintain aspect ratio",
                 divisible_by=32, img_compression=0, audio_vae=None, optional_latent=None,
                 use_custom_audio=False, save_prompts_to_file=False,
-                reference_image=None, reference_image_2=None, reference_image_3=None, reference_strength=1.0) -> io.NodeOutput:
+                reference_image=None, reference_image_2=None, reference_image_3=None, reference_strength=1.0,
+                char1_description="", char2_description="", char3_description="") -> io.NodeOutput:
 
         # --- Calculate Clean Output Bounds First ---
         clean_pixel_frames = duration_frames + 1
@@ -642,7 +684,10 @@ class LTXDirector(io.ComfyNode):
 
                 strength = strengths[idx] if idx < len(strengths) else 1.0
                 guide_data["images"].append(tensor)
+                
+                # Keep timeline images at their exact timeline frames (no shifting)
                 guide_data["insert_frames"].append(int(seg["start"]))
+                
                 guide_data["strengths"].append(float(strength))
             
             # If no images were loaded from the timeline, create a dummy image at strength 0
@@ -663,7 +708,7 @@ class LTXDirector(io.ComfyNode):
         except Exception as e:
             log.warning("[PromptRelay] Could not build guide_data: %s", e)
 
-        # --- Handle Reference Image Injection ---
+        # --- Handle Reference Image Injection (End-Hiding) ---
         if refs_to_process:
             if optional_latent is not None:
                 log.warning("[PromptRelay] You connected reference images AND an external 'optional_latent'. Make sure your custom latent is long enough to fit the appended reference frames!")
@@ -690,8 +735,7 @@ class LTXDirector(io.ComfyNode):
                     
                 guide_data["images"].append(ref_tensor)
                 
-                # Insert safely in the "hidden" padded latent blocks
-                # We place each ref 8 frames apart so they each get their own pure latent block.
+                # Safely hide reference sheets at the very end of the video sequence
                 insert_point = (clean_latent_frames + i) * 8
                 guide_data["insert_frames"].append(insert_point)
                 guide_data["strengths"].append(float(reference_strength))
@@ -721,8 +765,13 @@ class LTXDirector(io.ComfyNode):
         else:
             latent = optional_latent
 
+        # --- Preprocess Prompts with Character Tags ---
+        processed_global, processed_local = _preprocess_prompts_with_characters(
+            global_prompt, local_prompts, char1_description, char2_description, char3_description
+        )
+
         patched, conditioning = _encode_relay(
-            model, clip, latent, global_prompt, local_prompts, segment_lengths, epsilon,
+            model, clip, latent, processed_global, processed_local, segment_lengths, epsilon,
         )
 
         # --- Build Audio Output ---
@@ -794,9 +843,9 @@ class LTXDirector(io.ComfyNode):
         if save_prompts_to_file:
             try:
                 formatted_text = _format_timeline_to_text(
-                    global_prompt, duration_frames, float(frame_rate), epsilon,
+                    processed_global, duration_frames, float(frame_rate), epsilon,
                     custom_width, custom_height, resize_method,
-                    timeline_data, local_prompts, segment_lengths, guide_strength
+                    timeline_data, processed_local, segment_lengths, guide_strength
                 )
                 out_dir = folder_paths.get_output_directory()
                 filename = f"ltx_director_prompts_{int(time.time())}.txt"

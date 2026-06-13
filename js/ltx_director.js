@@ -1,24 +1,37 @@
-// --- START OF FILE ltx_director.js ---
-
 const { app } = window.comfyAPI.app;
 const { api } = window.comfyAPI.api;
 
 // --- UI Constants & Configuration ---
 const RULER_HEIGHT = 24;
-const BLOCK_HEIGHT = 160; // Increased to make the image timeline area much taller
+const BLOCK_HEIGHT = 160; 
 const AUDIO_TRACK_HEIGHT = 80;
 const CANVAS_HEIGHT = RULER_HEIGHT + BLOCK_HEIGHT + AUDIO_TRACK_HEIGHT;
 const HANDLE_HIT_PX = 14;
 const MIN_SEGMENT_LENGTH = 6;
-const MAX_THUMBNAIL_DIM = 512; // Increased to maintain quality for taller images
+const MAX_THUMBNAIL_DIM = 512; 
 
 const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "use_custom_audio"];
+
+// Backing widget definitions used for Python serialization
+const APPENDED_WIDGET_DEFAULTS = [
+  ["timeline_data", "{}"],
+  ["local_prompts", ""],
+  ["segment_lengths", ""]
+];
+
+// Safe backward-compatible rounded rectangle drawer
+function drawRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(x, y, w, h, r);
+  } else {
+    ctx.rect(x, y, w, h);
+  }
+}
 
 function hideWidget(w) {
   if (!w) return;
   if (!w._origType && w.type !== "hidden") w._origType = w.type;
-  // We don't set w.type = "hidden" anymore because it causes rendering issues in Nodes 2.0.
-  // Instead we use the computeSize = () => [0,0] trick which works in both V1 and V2.
   w.hidden = true;
   if (!w.options) w.options = {};
   w.options.hidden = true;
@@ -30,543 +43,93 @@ function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
 // --- Modern Dark/Grey UI CSS (ComfyUI Match) ---
 const STYLES = `
-  .pr-wrapper {
-    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    width: 100%;
-    height: 100%;
-    box-sizing: border-box;
-    padding-bottom: 4px;
-  }
-  .pr-wrapper.drag-active {
-    outline: 2px dashed #888;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 6px;
-  }
-  .pr-toolbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 2px 0px;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .pr-actions {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-  .pr-btn {
-    background: #222;
-    color: #e0e0e0;
-    border: 1px solid #111;
-    border-radius: 4px;
-    padding: 6px 12px;
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.2s ease;
-  }
-  .pr-btn:hover {
-    background: #333;
-    border-color: #555;
-  }
-  .pr-btn-danger:hover {
-    background: #4a1515;
-    border-color: #cc4444;
-    color: #ffaaaa;
-  }
-  .pr-canvas {
-    border-radius: 6px;
-    border: 1px solid #111;
-    background: #2a2a2a;
-    cursor: pointer;
-    width: 100%;
-    outline: none;
-    display: block; /* Ensure no inline baseline gaps */
-  }
-  .pr-prop-container {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    flex-grow: 1; /* Automatically scales to fill node height */
-    min-height: 40px;
-  }
-  .pr-prompt-area {
-    width: 100%;
-    height: 100%;
-    background: #222;
-    color: #e0e0e0;
-    border: 1px solid #111;
-    border-radius: 6px;
-    padding: 8px;
-    resize: none; /* Removed the manual resize corner handle */
-    font-size: 12px;
-    line-height: 1.4;
-    box-sizing: border-box;
-    outline: none;
-    transition: border-color 0.2s ease;
-  }
-  .pr-prompt-area:focus {
-    border-color: #888;
-  }
-  .pr-audio-info {
-    width: 100%;
-    height: 100%;
-    background: #181818;
-    color: #aaa;
-    border: 1px solid #111;
-    border-radius: 6px;
-    padding: 10px;
-    font-size: 12px;
-    line-height: 1.6;
-    box-sizing: border-box;
-    display: none;
-  }
+  .pr-wrapper { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; display: flex; flex-direction: column; gap: 8px; width: 100%; height: 100%; box-sizing: border-box; padding-bottom: 4px; }
+  .pr-wrapper.drag-active { outline: 2px dashed #888; background: rgba(255, 255, 255, 0.05); border-radius: 6px; }
+  .pr-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 2px 0px; flex-wrap: wrap; gap: 6px; flex-shrink: 0; }
+  .pr-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pr-btn { background: #222; color: #e0e0e0; border: 1px solid #111; border-radius: 4px; padding: 6px 12px; font-size: 11px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s ease; }
+  .pr-btn:hover { background: #333; border-color: #555; }
+  .pr-btn-danger:hover { background: #4a1515; border-color: #cc4444; color: #ffaaaa; }
+  .pr-canvas { border-radius: 6px; border: 1px solid #111; background: #2a2a2a; cursor: pointer; width: 100%; outline: none; display: block; }
+  .pr-prop-container { display: flex; flex-direction: column; width: 100%; flex-grow: 1; min-height: 40px; }
+  .pr-prompt-area { width: 100%; height: 100%; background: #222; color: #e0e0e0; border: 1px solid #111; border-radius: 6px; padding: 8px; resize: none; font-size: 12px; line-height: 1.4; box-sizing: border-box; outline: none; transition: border-color 0.2s ease; }
+  .pr-prompt-area:focus { border-color: #888; }
+  .pr-audio-info { width: 100%; height: 100%; background: #181818; color: #aaa; border: 1px solid #111; border-radius: 6px; padding: 10px; font-size: 12px; line-height: 1.6; box-sizing: border-box; display: none; }
   .pr-audio-info span { color: #fff; font-weight: 500; }
-  .pr-controls-group {
-    background: #1e1e1e;
-    border: 1px solid #333;
-    border-radius: 6px;
-    padding: 6px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-bottom: 4px;
-    box-sizing: border-box;
-    width: 100%;
-  }
-  .pr-strength-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    width: 100%;
-    box-sizing: border-box;
-  }
-  .pr-height-resizer {
-    height: 6px;
-    background: #2a2a2a;
-    cursor: ns-resize;
-    border-radius: 3px;
-    margin: 2px 0;
-    transition: background 0.15s;
-    border: 1px solid #1e1e1e;
-  }
-  .pr-height-resizer:hover {
-    background: #444;
-    border-color: #555;
-  }
-  .pr-strength-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: #fff;
-    white-space: nowrap;
-    margin-left: auto;
-  }
-  .pr-strength-slider {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 80px;
-    height: 4px;
-    background: #444;
-    border-radius: 2px;
-    outline: none;
-    cursor: pointer;
-    border: 1px solid #222;
-  }
-  .pr-strength-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: #aaa;
-    cursor: pointer;
-  }
-  .pr-strength-slider:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-  .pr-strength-input {
-    font-size: 12px;
-    color: #fff;
-    background: #222;
-    border: 1px solid #444;
-    border-radius: 4px;
-    width: 52px;
-    text-align: center;
-    padding: 3px;
-  }
-  .pr-strength-input::-webkit-outer-spin-button,
-  .pr-strength-input::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-  }
-  .pr-strength-input[type=number] {
-    -moz-appearance: textfield;
-  }
-  .pr-strength-input:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-  }
-  .pr-gap-menu {
-    position: fixed;
-    background: #1e1e1e;
-    border: 1px solid #444;
-    border-radius: 6px;
-    padding: 4px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    z-index: 9999;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
-  }
-  .pr-gap-menu-btn {
-    background: #2a2a2a;
-    color: #e0e0e0;
-    border: 1px solid #333;
-    border-radius: 4px;
-    padding: 6px 14px;
-    font-size: 11px;
-    font-family: inherit;
-    cursor: pointer;
-    text-align: left;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: background 0.15s ease;
-  }
-  .pr-gap-menu-btn:hover {
-    background: #3a3a3a;
-    border-color: #666;
-  }
-  .pr-player-controls {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 12px;
-    padding: 2px 0;
-    flex-wrap: wrap;
-    width: 100%;
-  }
-  .pr-icon-btn {
-    background: #2a2a2a;
-    border: 1px solid #444;
-    color: #eee;
-    cursor: pointer;
-    padding: 6px 12px;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-  }
-  .pr-icon-btn * {
-    pointer-events: none;
-  }
-  .pr-icon-btn:hover {
-    color: #fff;
-    background: #3a3a3a;
-    border-color: #666;
-  }
-  .pr-icon-btn.active {
-    color: #4fff8f;
-    border-color: #4fff8f;
-    background: #1a3a2a;
-  }
-  .pr-seek-bar {
-    -webkit-appearance: none;
-    appearance: none;
-    height: 6px;
-    background: #444;
-    border-radius: 3px;
-    outline: none;
-    cursor: pointer;
-    border: 1px solid #222;
-  }
-  .pr-seek-bar::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: #ff4444;
-    cursor: pointer;
-    border: 2px solid #222;
-  }
-  .pr-timeline-viewport {
-    width: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-  .pr-timeline-viewport::-webkit-scrollbar {
-    height: 10px;
-  }
-  .pr-timeline-viewport::-webkit-scrollbar-track {
-    background: #151515;
-    border-radius: 5px;
-  }
-  .pr-timeline-viewport::-webkit-scrollbar-thumb {
-    background: #444
-    border-radius: 5px;
-    border: 1px solid #000;
-  }
-  .pr-timeline-viewport::-webkit-scrollbar-thumb:hover {
-    background: #666
-    border-color: #000;
-  }
-  .pr-zoom-controls {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    margin-left: 12px;
-  }
-  .pr-zoom-slider {
-    width: 80px;
-    -webkit-appearance: none;
-    appearance: none;
-    height: 4px;
-    background: #444;
-    border-radius: 2px;
-    outline: none;
-    cursor: pointer;
-  }
-  .pr-zoom-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: #aaa;
-    cursor: pointer;
-  }
-  .pr-right-group {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .pr-segment-bounds {
-    font-size: 12px;
-    color: #aaa;
-    font-family: monospace;
-  }
-  .pr-timecode {
-    font-size: 14px;
-    font-weight: bold;
-    color: #e0e0e0;
-    font-family: monospace;
-  }
-  .pr-settings-menu {
-    position: fixed;
-    background: #1e1e1e;
-    border: 1px solid #444;
-    border-radius: 6px;
-    padding: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    z-index: 9999;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.7);
-    min-width: 220px;
-  }
-  .pr-settings-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding-bottom: 4px;
-    border-bottom: 1px solid #333;
-    margin-bottom: 2px;
-  }
-  .pr-settings-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .pr-settings-label {
-    font-size: 12px;
-    color: #bbb;
-    flex: 1;
-    white-space: nowrap;
-  }
-  .pr-number-control {
-    display: flex;
-    align-items: center;
-    border: 1px solid #444;
-    border-radius: 4px;
-    background: #2a2a2a;
-    overflow: hidden;
-  }
-  .pr-number-btn {
-    background: #333;
-    color: #aaa;
-    border: none;
-    width: 20px;
-    height: 22px;
-    cursor: pointer;
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.15s;
-    user-select: none;
-  }
-  .pr-number-btn:hover {
-    background: #444;
-    color: #fff;
-  }
-  .pr-settings-input {
-    background: transparent;
-    color: #e0e0e0;
-    border: none;
-    padding: 0 4px;
-    font-size: 12px;
-    width: 50px;
-    height: 22px;
-    text-align: center;
-    font-family: monospace;
-    outline: none;
-    -moz-appearance: textfield;
-  }
-  .pr-settings-input::-webkit-outer-spin-button,
-  .pr-settings-input::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-  }
-  .pr-settings-select {
-    background: #2a2a2a;
-    color: #e0e0e0;
-    border: 1px solid #444;
-    border-radius: 4px;
-    padding: 3px 4px;
-    font-size: 12px;
-    width: 98px;
-    cursor: pointer;
-  }
-  .pr-settings-divider {
-    border: none;
-    border-top: 1px solid #2a2a2a;
-    margin: 2px 0;
-  }
-  .pr-settings-toggle-btn {
-    width: 100%;
-    background: #252525;
-    color: #aaa;
-    border: 1px solid #333;
-    border-radius: 4px;
-    padding: 5px 8px;
-    font-size: 11px;
-    cursor: pointer;
-    text-align: center;
-    transition: all 0.15s;
-  }
-  .pr-settings-toggle-btn:hover {
-    background: #2e2e2e;
-    color: #ccc;
-    border-color: #555;
-  }
-  .pr-settings-close-btn {
-    background: transparent;
-    color: #888;
-    border: none;
-    cursor: pointer;
-    padding: 2px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    transition: all 0.15s;
-  }
-  .pr-settings-close-btn:hover {
-    color: #fff;
-    background: rgba(255,255,255,0.1);
-  }
-  .pr-segmented-control {
-    display: flex;
-    background: #1e1e1e;
-    border: 1px solid #333;
-    border-radius: 6px;
-    padding: 2px;
-    width: 110px;
-    height: 22px;
-    align-items: center;
-    box-sizing: border-box;
-  }
-  .pr-segment {
-    flex: 1;
-    text-align: center;
-    font-size: 10px;
-    font-weight: 500;
-    line-height: 18px;
-    cursor: pointer;
-    border-radius: 4px;
-    color: #888;
-    transition: all 0.15s ease;
-  }
-  .pr-segment.active {
-    background: #333;
-    color: #fff;
-  }
-  .pr-segment:hover:not(.active) {
-    color: #ccc;
-  }
-  
-  /* Autocomplete suggestion styles */
-  .pr-autocomplete-menu {
-    position: fixed;
-    background: #181818;
-    border: 1px solid #444;
-    border-radius: 6px;
-    padding: 4px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    z-index: 10000;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
-    min-width: 180px;
-    max-height: 200px;
-    overflow-y: auto;
-  }
-  .pr-autocomplete-item {
-    background: #252525;
-    color: #aaa;
-    border: 1px solid #333;
-    border-radius: 4px;
-    padding: 6px 12px;
-    font-size: 11px;
-    font-family: monospace;
-    cursor: pointer;
-    text-align: left;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    transition: all 0.15s ease;
-  }
-  .pr-autocomplete-item:hover, .pr-autocomplete-item.active {
-    background: #1c222d;
-    color: #4fff8f;
-    border-color: #4fff8f;
-  }
-  .pr-autocomplete-item span {
-    font-weight: bold;
-    font-size: 12px;
-  }
-  .pr-autocomplete-item small {
-    color: #777;
-    font-size: 10px;
-  }
-  .pr-autocomplete-item.active small {
-    color: #4fff8f;
-    opacity: 0.8;
-  }
+  .pr-controls-group { background: #1e1e1e; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
+  .pr-strength-row { display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box; }
+  .pr-height-resizer { height: 6px; background: #2a2a2a; cursor: ns-resize; border-radius: 3px; margin: 2px 0; transition: background 0.15s; border: 1px solid #1e1e1e; }
+  .pr-height-resizer:hover { background: #444; border-color: #555; }
+  .pr-strength-label { font-size: 11px; font-weight: 600; color: #fff; white-space: nowrap; margin-left: auto; }
+  .pr-strength-slider { -webkit-appearance: none; appearance: none; width: 80px; height: 4px; background: #444; border-radius: 2px; outline: none; cursor: pointer; border: 1px solid #222; }
+  .pr-strength-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #aaa; cursor: pointer; }
+  .pr-strength-slider:disabled { opacity: 0.3; cursor: not-allowed; }
+  .pr-strength-input { font-size: 12px; color: #fff; background: #222; border: 1px solid #444; border-radius: 4px; width: 52px; text-align: center; padding: 3px; }
+  .pr-strength-input::-webkit-outer-spin-button, .pr-strength-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .pr-strength-input[type=number] { -moz-appearance: textfield; }
+  .pr-strength-input:disabled { opacity: 0.35; cursor: not-allowed; }
+  .pr-gap-menu { position: fixed; background: #1e1e1e; border: 1px solid #444; border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 4px; z-index: 9999; box-shadow: 0 4px 16px rgba(0,0,0,0.6); }
+  .pr-gap-menu-btn { background: #2a2a2a; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; padding: 6px 14px; font-size: 11px; font-family: inherit; cursor: pointer; text-align: left; white-space: nowrap; display: flex; align-items: center; gap: 6px; transition: background 0.15s ease; }
+  .pr-gap-menu-btn:hover { background: #3a3a3a; border-color: #666; }
+  .pr-player-controls { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 2px 0; flex-wrap: wrap; width: 100%; }
+  .pr-icon-btn { background: #2a2a2a; border: 1px solid #444; color: #eee; cursor: pointer; padding: 6px 12px; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+  .pr-icon-btn * { pointer-events: none; }
+  .pr-icon-btn:hover { color: #fff; background: #3a3a3a; border-color: #666; }
+  .pr-icon-btn.active { color: #4fff8f; border-color: #4fff8f; background: #1a3a2a; }
+  .pr-seek-bar { -webkit-appearance: none; appearance: none; height: 6px; background: #444; border-radius: 3px; outline: none; cursor: pointer; border: 1px solid #222; }
+  .pr-seek-bar::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #ff4444; cursor: pointer; border: 2px solid #222; }
+  .pr-timeline-viewport { width: 100%; overflow-x: auto; overflow-y: hidden; flex-shrink: 0; }
+  .pr-timeline-viewport::-webkit-scrollbar { height: 10px; }
+  .pr-timeline-viewport::-webkit-scrollbar-track { background: #151515; border-radius: 5px; }
+  .pr-timeline-viewport::-webkit-scrollbar-thumb { background: #444; border-radius: 5px; border: 1px solid #000; }
+  .pr-timeline-viewport::-webkit-scrollbar-thumb:hover { background: #666; border-color: #000; }
+  .pr-zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: 12px; }
+  .pr-zoom-slider { width: 80px; -webkit-appearance: none; appearance: none; height: 4px; background: #444; border-radius: 2px; outline: none; cursor: pointer; }
+  .pr-zoom-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #aaa; cursor: pointer; }
+  .pr-right-group { display: flex; align-items: center; gap: 12px; }
+  .pr-segment-bounds { font-size: 12px; color: #aaa; font-family: monospace; }
+  .pr-timecode { font-size: 14px; font-weight: bold; color: #e0e0e0; font-family: monospace; }
+  .pr-settings-menu { position: fixed; background: #1e1e1e; border: 1px solid #444; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px; z-index: 9999; box-shadow: 0 4px 20px rgba(0,0,0,0.7); min-width: 220px; }
+  .pr-settings-title { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.06em; padding-bottom: 4px; border-bottom: 1px solid #333; margin-bottom: 2px; }
+  .pr-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .pr-settings-label { font-size: 12px; color: #bbb; flex: 1; white-space: nowrap; }
+  .pr-number-control { display: flex; align-items: center; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; overflow: hidden; }
+  .pr-number-btn { background: #333; color: #aaa; border: none; width: 20px; height: 22px; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; transition: background 0.15s; user-select: none; }
+  .pr-number-btn:hover { background: #444; color: #fff; }
+  .pr-settings-input { background: transparent; color: #e0e0e0; border: none; padding: 0 4px; font-size: 12px; width: 50px; height: 22px; text-align: center; font-family: monospace; outline: none; -moz-appearance: textfield; }
+  .pr-settings-input::-webkit-outer-spin-button, .pr-settings-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .pr-settings-select { background: #2a2a2a; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 3px 4px; font-size: 12px; width: 98px; cursor: pointer; }
+  .pr-settings-divider { border: none; border-top: 1px solid #2a2a2a; margin: 2px 0; }
+  .pr-settings-toggle-btn { width: 100%; background: #252525; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 5px 8px; font-size: 11px; cursor: pointer; text-align: center; transition: all 0.15s; }
+  .pr-settings-toggle-btn:hover { background: #2e2e2e; color: #ccc; border-color: #555; }
+  .pr-settings-close-btn { background: transparent; color: #888; border: none; cursor: pointer; padding: 2px; display: flex; align-items: center; justify-content: center; border-radius: 4px; transition: all 0.15s; }
+  .pr-settings-close-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+  .pr-segmented-control { display: flex; background: #1e1e1e; border: 1px solid #333; border-radius: 6px; padding: 2px; width: 110px; height: 22px; align-items: center; box-sizing: border-box; }
+  .pr-segment { flex: 1; text-align: center; font-size: 10px; font-weight: 500; line-height: 18px; cursor: pointer; border-radius: 4px; color: #888; transition: all 0.15s ease; }
+  .pr-segment.active { background: #333; color: #fff; }
+  .pr-segment:hover:not(.active) { color: #ccc; }
+  .pr-characters-container { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
+  .pr-character-slot { flex: 1; background: #1e1e1e; border: 1.5px dashed #444; border-radius: 8px; height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 4px; position: relative; cursor: pointer; overflow: hidden; transition: all 0.2s ease; box-sizing: border-box; }
+  .pr-character-slot:hover { border-color: #666; background: #252525; }
+  .pr-character-slot.drag-over { border-color: #4fff8f; background: rgba(79, 255, 143, 0.05); }
+  .pr-character-label { font-size: 10px; font-weight: bold; color: #888; margin-bottom: 2px; pointer-events: none; }
+  .pr-character-placeholder { font-size: 9px; color: #666; text-align: center; pointer-events: none; margin-top: 10px; }
+  .pr-character-previews-row { display: flex; width: 100%; height: 52px; gap: 4px; position: relative; }
+  .pr-character-preview-wrapper { flex: 1; height: 100%; position: relative; overflow: hidden; border-radius: 3px; background: #111; }
+  .pr-character-preview { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+  .pr-character-delete { position: absolute; top: 2px; right: 2px; background: rgba(0, 0, 0, 0.85); color: #ff4444; border: none; border-radius: 50%; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 9px; transition: background 0.15s; z-index: 10; padding: 0; }
+  .pr-character-delete:hover { background: #ff4444; color: #fff; }
+  .pr-character-validate-btn { position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.85); color: #e0e0e0; border: 1px solid #444; border-radius: 3px; padding: 2px 8px; font-size: 9px; font-weight: bold; cursor: pointer; transition: all 0.15s; z-index: 20; }
+  .pr-character-validate-btn:hover { background: #4fff8f; color: #000; border-color: #4fff8f; }
+  .pr-character-validate-btn.loading { background: #333; color: #888; cursor: wait; pointer-events: none; }
+  .pr-character-desc { width: 100%; height: 38px; background: #111; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; font-size: 9px; resize: none; box-sizing: border-box; padding: 2px 4px; margin-top: 10px; outline: none; font-family: inherit; z-index: 10; }
+  .pr-character-desc:focus { border-color: #4fff8f; }
+  .pr-autocomplete-menu { position: fixed; background: #181818; border: 1px solid #444; border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; z-index: 100000; box-shadow: 0 4px 16px rgba(0,0,0,0.6); min-width: 180px; max-height: 200px; overflow-y: auto; }
+  .pr-autocomplete-item { background: #252525; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 6px 12px; font-size: 11px; font-family: monospace; cursor: pointer; text-align: left; display: flex; align-items: center; justify-content: space-between; transition: all 0.15s ease; }
+  .pr-autocomplete-item:hover, .pr-autocomplete-item.active { background: #1c222d; color: #4fff8f; border-color: #4fff8f; }
+  .pr-autocomplete-item span { font-weight: bold; font-size: 12px; }
+  .pr-autocomplete-item small { color: #777; font-size: 10px; }
+  .pr-autocomplete-item.active small { color: #4fff8f; opacity: 0.8; }
 `;
 
 if (!document.getElementById("prompt-relay-styles")) {
@@ -594,12 +157,36 @@ const ICONS = {
 
 // --- Data Models ---
 function parseInitial(jsonStr) {
-  let parsed = { segments: [], audioSegments: [] };
+  let parsed = { 
+    segments: [], 
+    audioSegments: [], 
+    characters: [
+      { images: [], description: "" },
+      { images: [], description: "" },
+      { images: [], description: "" }
+    ]
+  };
   try {
     if (jsonStr) {
       const p = JSON.parse(jsonStr);
       if (Array.isArray(p.segments)) parsed.segments = p.segments;
       if (Array.isArray(p.audioSegments)) parsed.audioSegments = p.audioSegments;
+      if (Array.isArray(p.characters)) {
+        parsed.characters = p.characters;
+        while (parsed.characters.length < 3) {
+          parsed.characters.push({ images: [], description: "" });
+        }
+        parsed.characters.forEach(c => {
+          if (c) {
+            if (!c.images) c.images = [];
+            if (c.imageB64) {
+              c.images.push({ b64: c.imageB64, name: c.fileName || "" });
+              delete c.imageB64;
+              delete c.fileName;
+            }
+          }
+        });
+      }
     }
   } catch (e) { }
 
@@ -694,7 +281,7 @@ class TimelineEditor {
       this.selectedIndex = 0;
     }
     this.updateUIFromSelection();
-    this.commitChanges(true);
+    this.commitChanges(false); // Changed to false so canvas renders immediately on creation (fixes gray block bug)
     // Hide settings widgets by default to reduce node clutter.
     // Deferred so all widget types are finalized before we touch them.
     setTimeout(() => this.hideSettingsWidgets(), 0);
@@ -763,6 +350,8 @@ class TimelineEditor {
     this.pauseAudio();
     window.removeEventListener("keydown", this.handleKeyDown, true);
     window.removeEventListener("paste", this.handlePaste, true);
+    window.removeEventListener("mousemove", this._boundMouseMove);
+    window.removeEventListener("mouseup", this._boundMouseUp);
     if (this._autocompleteMenu) { this._autocompleteMenu.remove(); }
   }
 
@@ -1074,6 +663,9 @@ class TimelineEditor {
     const propContainer = document.createElement("div");
     propContainer.className = "pr-prop-container";
 
+    // Visual character references setup
+    this.createCharacterSlots(propContainer);
+
     // --- Text Area (Image/Text) ---
     this.promptInput = document.createElement("textarea");
     this.promptInput.className = "pr-prompt-area";
@@ -1092,6 +684,7 @@ class TimelineEditor {
     propContainer.appendChild(this.promptInput);
     propContainer.appendChild(this.audioInfoArea);
 
+    // Re-attached drag and drop file capabilities on wrapper
     this.wrapper.addEventListener("dragover", (e) => {
       e.preventDefault();
       this.wrapper.classList.add("drag-active");
@@ -1181,8 +774,6 @@ class TimelineEditor {
           if (file.type.startsWith("image/")) imageFiles.push(file);
         }
 
-        // Let implicit intent handle mixing drops: use the track we hovered over
-        // for the first type we process, or fallback.
         if (audioFiles.length > 0 && (targetTrack === "audio" || imageFiles.length === 0)) {
           this.handleAudioUpload(audioFiles, targetFrameStart);
         } else if (imageFiles.length > 0) {
@@ -1191,123 +782,15 @@ class TimelineEditor {
       }
     });
 
-    window.addEventListener("mousemove", (e) => this.onMouseMove(e));
-    window.addEventListener("mouseup", (e) => this.onMouseUp(e));
+    // Re-attached robust leak-free listener hooks for dragging segments
+    this._boundMouseMove = (e) => this.onMouseMove(e);
+    this._boundMouseUp = (e) => this.onMouseUp(e);
+    window.addEventListener("mousemove", this._boundMouseMove);
+    window.addEventListener("mouseup", this._boundMouseUp);
 
-    // --- Player Controls ---
-    const playerControls = document.createElement("div");
-    playerControls.className = "pr-player-controls";
+    this.wrapper.appendChild(toolbar);
+    this.wrapper.appendChild(this.viewport);
 
-    this.playBtn = document.createElement("button");
-    this.playBtn.className = "pr-icon-btn";
-    this.playBtn.style.padding = "4px";
-    this.playBtn.innerHTML = ICONS.play;
-    this.playBtn.title = "Play/Pause Audio";
-    this.playBtn.addEventListener("click", () => this.togglePlay());
-
-    this.loopBtn = document.createElement("button");
-    this.loopBtn.className = "pr-icon-btn";
-    this.loopBtn.style.padding = "4px";
-    this.loopBtn.innerHTML = ICONS.loop;
-    this.loopBtn.title = "Toggle Loop";
-    this.loopBtn.addEventListener("click", () => this.toggleLoop());
-
-    this.seekBar = document.createElement("input");
-    this.seekBar.type = "range";
-    this.seekBar.className = "pr-seek-bar";
-    this.seekBar.min = "0";
-    this.seekBar.value = "0";
-    this.seekBar.style.flex = "1"; // take up remaining space
-    this.seekBar.addEventListener("input", (e) => {
-      this.currentFrame = parseInt(e.target.value, 10);
-      this.render();
-      if (this.isPlaying) {
-        this.playAudio();
-      }
-    });
-
-    // --- Zoom Controls ---
-    const zoomControls = document.createElement("div");
-    zoomControls.className = "pr-zoom-controls";
-
-    const zoomOutBtn = document.createElement("button");
-    zoomOutBtn.className = "pr-icon-btn";
-    zoomOutBtn.style.padding = "4px";
-    zoomOutBtn.innerHTML = ICONS.minus;
-    zoomOutBtn.title = "Zoom Out";
-    zoomOutBtn.addEventListener("click", () => {
-      const currentZoom = parseFloat(this.zoomSlider.value);
-      this.zoomSlider.value = Math.max(1, currentZoom - 0.5);
-      this.zoomSlider.dispatchEvent(new Event("input"));
-    });
-
-    this.zoomSlider = document.createElement("input");
-    this.zoomSlider.type = "range";
-    this.zoomSlider.className = "pr-zoom-slider";
-    this.zoomSlider.min = "1";
-    this.zoomSlider.max = "1"; // Updated dynamically via updateZoomSliderMax()
-    this.zoomSlider.step = "0.1";
-    this.zoomSlider.value = "1";
-    this.zoomSlider.title = "Zoom Level";
-    this.zoomSlider.addEventListener("input", (e) => {
-      this.zoomLevel = parseFloat(e.target.value);
-
-      const viewportWidth = this.viewport.clientWidth;
-      const newCanvasWidth = Math.max(viewportWidth, viewportWidth * this.zoomLevel);
-
-      this.canvas.style.width = newCanvasWidth + "px";
-      this.resizeCanvas(newCanvasWidth);
-      this._lastWidth = viewportWidth;
-      this._lastZoom = this.zoomLevel;
-
-      // Keep playhead centered
-      const totalFrames = this.getVisualDurationFrames();
-      const playheadRatio = this.currentFrame / totalFrames;
-      const newPlayheadX = playheadRatio * newCanvasWidth;
-      this.viewport.scrollLeft = newPlayheadX - (viewportWidth / 2);
-    });
-
-    const zoomInBtn = document.createElement("button");
-    zoomInBtn.className = "pr-icon-btn";
-    zoomInBtn.style.padding = "4px";
-    zoomInBtn.innerHTML = ICONS.plus;
-    zoomInBtn.title = "Zoom In";
-    zoomInBtn.addEventListener("click", () => {
-      const currentZoom = parseFloat(this.zoomSlider.value);
-      this.zoomSlider.value = Math.min(this.getMaxZoom(), currentZoom + 0.5);
-      this.zoomSlider.dispatchEvent(new Event("input"));
-    });
-
-    const zoomFitBtn = document.createElement("button");
-    zoomFitBtn.className = "pr-icon-btn";
-    zoomFitBtn.style.padding = "4px";
-    zoomFitBtn.style.marginLeft = "4px";
-    zoomFitBtn.innerHTML = ICONS.fit;
-    zoomFitBtn.title = "Zoom to Fit (show full timeline)";
-    zoomFitBtn.addEventListener("click", () => {
-      this.zoomLevel = 1;
-      this.zoomSlider.value = 1;
-      const viewportWidth = this.viewport.clientWidth;
-      this.canvas.style.width = viewportWidth + "px";
-      this.resizeCanvas(viewportWidth);
-      this._lastWidth = viewportWidth;
-      this._lastZoom = 1;
-      this.viewport.scrollLeft = 0;
-    });
-
-    zoomControls.appendChild(zoomOutBtn);
-    zoomControls.appendChild(this.zoomSlider);
-    zoomControls.appendChild(zoomInBtn);
-    zoomControls.appendChild(zoomFitBtn);
-
-    playerControls.appendChild(this.playBtn);
-    playerControls.appendChild(this.loopBtn);
-    playerControls.appendChild(this.seekBar);
-    playerControls.appendChild(zoomControls);
-
-
-
-    // --- Guide Strength Slider ---
     this.strengthRow = document.createElement("div");
     this.strengthRow.className = "pr-strength-row";
 
@@ -1322,17 +805,12 @@ class TimelineEditor {
     this.strengthValue.disabled = true;
     this.strengthValue.style.cursor = "ew-resize";
 
-    // Dragging logic for guide strength
-    let isDragging = false;
-    let startX = 0;
-    let startVal = 0;
-    let hasMoved = false;
-
     this.strengthValue.addEventListener("mousedown", (e) => {
       if (this.strengthValue.disabled) return;
-      startX = e.clientX;
-      startVal = parseFloat(this.strengthValue.value) || 1.0;
-      hasMoved = false;
+      let startX = e.clientX;
+      let startVal = parseFloat(this.strengthValue.value) || 1.0;
+      let hasMoved = false;
+      let isDragging = false;
 
       const onMouseMove = (moveEvent) => {
         const deltaX = moveEvent.clientX - startX;
@@ -1395,24 +873,385 @@ class TimelineEditor {
     this.strengthRow.appendChild(strengthLabel);
     this.strengthRow.appendChild(this.strengthValue);
 
+    this.playBtn = document.createElement("button");
+    this.playBtn.className = "pr-icon-btn";
+    this.playBtn.style.padding = "4px";
+    this.playBtn.innerHTML = ICONS.play;
+    this.playBtn.title = "Play/Pause Audio";
+    this.playBtn.addEventListener("click", () => this.togglePlay());
 
-    this.wrapper.appendChild(toolbar);
-    this.wrapper.appendChild(this.viewport);
+    this.loopBtn = document.createElement("button");
+    this.loopBtn.className = "pr-icon-btn";
+    this.loopBtn.style.padding = "4px";
+    this.loopBtn.innerHTML = ICONS.loop;
+    this.loopBtn.title = "Toggle Loop";
+    this.loopBtn.addEventListener("click", () => this.toggleLoop());
+
+    this.seekBar = document.createElement("input");
+    this.seekBar.type = "range";
+    this.seekBar.className = "pr-seek-bar";
+    this.seekBar.min = "0";
+    this.seekBar.value = "0";
+    this.seekBar.style.flex = "1"; 
+    this.seekBar.addEventListener("input", (e) => {
+      this.currentFrame = parseInt(e.target.value, 10);
+      this.render();
+      if (this.isPlaying) {
+        this.playAudio();
+      }
+    });
+
+    const zoomControls = document.createElement("div");
+    zoomControls.className = "pr-zoom-controls";
+
+    const zoomOutBtn = document.createElement("button");
+    zoomOutBtn.className = "pr-icon-btn";
+    zoomOutBtn.style.padding = "4px";
+    zoomOutBtn.innerHTML = ICONS.minus;
+    zoomOutBtn.title = "Zoom Out";
+    zoomOutBtn.addEventListener("click", () => {
+      const currentZoom = parseFloat(this.zoomSlider.value);
+      this.zoomSlider.value = Math.max(1, currentZoom - 0.5);
+      this.zoomSlider.dispatchEvent(new Event("input"));
+    });
+
+    this.zoomSlider = document.createElement("input");
+    this.zoomSlider.type = "range";
+    this.zoomSlider.className = "pr-zoom-slider";
+    this.zoomSlider.min = "1";
+    this.zoomSlider.max = "1"; 
+    this.zoomSlider.step = "0.1";
+    this.zoomSlider.value = "1";
+    this.zoomSlider.title = "Zoom Level";
+    this.zoomSlider.addEventListener("input", (e) => {
+      this.zoomLevel = parseFloat(e.target.value);
+
+      const viewportWidth = this.viewport.clientWidth;
+      const newCanvasWidth = Math.max(viewportWidth, viewportWidth * this.zoomLevel);
+
+      this.canvas.style.width = newCanvasWidth + "px";
+      this.resizeCanvas(newCanvasWidth);
+      this._lastWidth = viewportWidth;
+      this._lastZoom = this.zoomLevel;
+
+      const totalFrames = this.getVisualDurationFrames();
+      const playheadRatio = this.currentFrame / totalFrames;
+      const newPlayheadX = playheadRatio * newCanvasWidth;
+      this.viewport.scrollLeft = newPlayheadX - (viewportWidth / 2);
+    });
+
+    const zoomInBtn = document.createElement("button");
+    zoomInBtn.className = "pr-icon-btn";
+    zoomInBtn.style.padding = "4px";
+    zoomInBtn.innerHTML = ICONS.plus;
+    zoomInBtn.title = "Zoom In";
+    zoomInBtn.addEventListener("click", () => {
+      const currentZoom = parseFloat(this.zoomSlider.value);
+      this.zoomSlider.value = Math.min(this.getMaxZoom(), currentZoom + 0.5);
+      this.zoomSlider.dispatchEvent(new Event("input"));
+    });
+
+    const zoomFitBtn = document.createElement("button");
+    zoomFitBtn.className = "pr-icon-btn";
+    zoomFitBtn.style.padding = "4px";
+    zoomFitBtn.style.marginLeft = "4px";
+    zoomFitBtn.innerHTML = ICONS.fit;
+    zoomFitBtn.title = "Zoom to Fit (show full timeline)";
+    zoomFitBtn.addEventListener("click", () => {
+      this.zoomLevel = 1;
+      this.zoomSlider.value = 1;
+      const viewportWidth = this.viewport.clientWidth;
+      this.canvas.style.width = viewportWidth + "px";
+      this.resizeCanvas(viewportWidth);
+      this._lastWidth = viewportWidth;
+      this._lastZoom = 1;
+      this.viewport.scrollLeft = 0;
+    });
+
+    zoomControls.appendChild(zoomOutBtn);
+    zoomControls.appendChild(this.zoomSlider);
+    zoomControls.appendChild(zoomInBtn);
+    zoomControls.appendChild(zoomFitBtn);
+
+    const playerControls = document.createElement("div");
+    playerControls.className = "pr-player-controls";
+    playerControls.appendChild(this.playBtn);
+    playerControls.appendChild(this.loopBtn);
+    playerControls.appendChild(this.seekBar);
+    playerControls.appendChild(zoomControls);
 
     const controlsGroup = document.createElement("div");
     controlsGroup.className = "pr-controls-group";
     controlsGroup.appendChild(this.strengthRow);
     controlsGroup.appendChild(playerControls);
+
     this.wrapper.appendChild(controlsGroup);
     this.wrapper.appendChild(propContainer);
 
     this.container.appendChild(this.wrapper);
     
-    // --- Initialize autocomplete popup support ---
     this.setupAutocomplete();
   }
 
-  // --- Auto-complete Popup Setup ---
+  // --- Visual Character Reference Slots ---
+  createCharacterSlots(parent) {
+    const container = document.createElement("div");
+    container.className = "pr-characters-container";
+    
+    if (!this.timeline.characters) {
+      this.timeline.characters = [
+        { images: [], description: "" },
+        { images: [], description: "" },
+        { images: [], description: "" }
+      ];
+    }
+    
+    this.characterSlots = [];
+    
+    for (let i = 0; i < 3; i++) {
+      const slot = document.createElement("div");
+      slot.className = "pr-character-slot";
+      slot.dataset.index = i;
+      
+      slot.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.stopPropagation(); // Stop timeline ghost blocks from appearing when dropping reference sheets
+        slot.classList.add("drag-over");
+      });
+      
+      slot.addEventListener("dragleave", (e) => {
+        e.stopPropagation();
+        slot.classList.remove("drag-over");
+      });
+      
+      slot.addEventListener("drop", (e) => {
+        e.preventDefault();
+        e.stopPropagation(); // Stop target placement logic on sheets
+        slot.classList.remove("drag-over");
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          Array.from(e.dataTransfer.files).forEach(f => this.handleCharacterImageUpload(f, i));
+        }
+      });
+      
+      slot.addEventListener("click", (e) => {
+        if (e.target.closest(".pr-character-delete") || 
+            e.target.closest(".pr-character-validate-btn") || 
+            e.target.closest(".pr-character-desc")) return;
+        
+        const fi = document.createElement("input");
+        fi.type = "file";
+        fi.accept = "image/*";
+        fi.multiple = true;
+        fi.addEventListener("change", (ev) => {
+          if (ev.target.files) {
+            Array.from(ev.target.files).forEach(f => this.handleCharacterImageUpload(f, i));
+          }
+        });
+        fi.click();
+      });
+      
+      container.appendChild(slot);
+      this.characterSlots.push(slot);
+    }
+    
+    parent.appendChild(container);
+    this.updateCharacterSlotsUI();
+  }
+
+  handleCharacterImageUpload(file, idx) {
+    if (!file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const imgObj = new Image();
+      imgObj.onload = () => {
+        const maxDim = 1536; // Increased from 512 to 1536 to preserve high-resolution details [1.3.5]
+        let w = imgObj.width;
+        let h = imgObj.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(imgObj, 0, 0, w, h);
+        
+        // Increased compression quality parameter to 95% to preserve maximum details [1.3.5]
+        const downscaledB64 = canvas.toDataURL("image/jpeg", 0.95);
+        
+        if (!this.timeline.characters[idx].images) {
+          this.timeline.characters[idx].images = [];
+        }
+        if (this.timeline.characters[idx].images.length >= 2) {
+          this.timeline.characters[idx].images.shift();
+        }
+        
+        this.timeline.characters[idx].images.push({ b64: downscaledB64, name: file.name });
+        this.updateCharacterSlotsUI();
+        this.commitChanges();
+      };
+      imgObj.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  updateCharacterSlotsUI() {
+    if (!this.characterSlots) return;
+    
+    if (!this.timeline.characters) {
+      this.timeline.characters = [
+        { images: [], description: "" },
+        { images: [], description: "" },
+        { images: [], description: "" }
+      ];
+    }
+    
+    for (let i = 0; i < 3; i++) {
+      const slot = this.characterSlots[i];
+      const data = this.timeline.characters[i] || { images: [], description: "" };
+      slot.innerHTML = ""; 
+      
+      if (data.images && data.images.length > 0) {
+        const previewsRow = document.createElement("div");
+        previewsRow.className = "pr-character-previews-row";
+
+        data.images.forEach((imgData, imgIdx) => {
+          const imgWrapper = document.createElement("div");
+          imgWrapper.className = "pr-character-preview-wrapper";
+          
+          const img = document.createElement("img");
+          img.className = "pr-character-preview";
+          img.src = imgData.b64;
+          imgWrapper.appendChild(img);
+
+          const delBtn = document.createElement("button");
+          delBtn.className = "pr-character-delete";
+          delBtn.innerHTML = ICONS.close;
+          delBtn.title = "Delete Image";
+          delBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (this.timeline.characters[i] && this.timeline.characters[i].images) {
+              this.timeline.characters[i].images.splice(imgIdx, 1);
+              this.updateCharacterSlotsUI();
+              this.commitChanges();
+            }
+          });
+          imgWrapper.appendChild(delBtn);
+          previewsRow.appendChild(imgWrapper);
+        });
+
+        const valBtn = document.createElement("button");
+        valBtn.className = "pr-character-validate-btn";
+        valBtn.textContent = data.description ? "Re-Analyze" : "Analyze";
+        valBtn.title = "Run Gemma 4 Multimodal Analysis";
+        valBtn.style.left = "50%";
+        valBtn.style.transform = "translateX(-50%)";
+        
+        valBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.runGemmaAnalysis(i, valBtn);
+        });
+        previewsRow.appendChild(valBtn);
+        
+        slot.appendChild(previewsRow);
+
+        const descInput = document.createElement("textarea");
+        descInput.className = "pr-character-desc";
+        descInput.value = data.description || "";
+        descInput.placeholder = "manual description...";
+        descInput.addEventListener("input", () => {
+          this.timeline.characters[i].description = descInput.value;
+          this.commitChanges();
+        });
+        descInput.addEventListener("click", (e) => {
+          e.stopPropagation(); 
+        });
+        slot.appendChild(descInput);
+      } else {
+        const label = document.createElement("div");
+        label.className = "pr-character-label";
+        label.textContent = `@char${i+1}`;
+        
+        const placeholder = document.createElement("div");
+        placeholder.className = "pr-character-placeholder";
+        placeholder.innerHTML = `${ICONS.upload}<br>Drop Sheet`;
+        
+        slot.appendChild(label);
+        slot.appendChild(placeholder);
+      }
+    }
+  }
+
+  async runGemmaAnalysis(idx, btn) {
+    if (btn.classList.contains("loading")) return;
+    
+    btn.classList.add("loading");
+    btn.textContent = "Analyzing...";
+    
+    let clip_name = "";
+    try {
+      const inputs = this.node.inputs || [];
+      const clipLink = inputs.find(i => i.name === "clip")?.link;
+      if (clipLink) {
+        const linkInfo = window.app.graph.links[clipLink];
+        if (linkInfo) {
+          const originNode = window.app.graph.getNodeById(linkInfo.origin_id);
+          if (originNode) {
+            const widgets = originNode.widgets || [];
+            const modelWidget = widgets.find(w => 
+              w.name === "clip_name" || w.name === "clip_name_1" || 
+              w.name === "clip_name_2" || w.name === "clip" || w.name === "model_name"
+            );
+            if (modelWidget) {
+              clip_name = modelWidget.value;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[PromptRelay] Could not traverse graph to find CLIPLoader name", e);
+    }
+    
+    const b64_images = (this.timeline.characters[idx].images || []).map(img => img.b64);
+
+    try {
+      const resp = await api.fetchApi("/ltx_director/analyze_character", {
+        method: "POST",
+        body: JSON.stringify({
+          clip_name: clip_name,
+          image_b64: b64_images,
+          char_index: idx
+        })
+      });
+      
+      const result = await resp.json();
+      if (result.status === "success") {
+        this.timeline.characters[idx].description = result.description;
+        btn.textContent = "Success!";
+        setTimeout(() => {
+          this.updateCharacterSlotsUI();
+          this.commitChanges();
+        }, 1500);
+      } else {
+        alert("Gemma Analysis Error: " + result.message);
+        btn.classList.remove("loading");
+        btn.textContent = "Analyze";
+      }
+    } catch (err) {
+      console.error("[PromptRelay] Gemma analysis request failed", err);
+      alert("Request failed. Is your server running?");
+      btn.classList.remove("loading");
+      btn.textContent = "Analyze";
+    }
+  }
+// --- Auto-complete Popup Setup ---
   setupAutocomplete() {
     const input = this.promptInput;
     if (!input) return;
@@ -1426,10 +1265,7 @@ class TimelineEditor {
     const suggestions = [
       { tag: "@char1", label: "Character 1" },
       { tag: "@char2", label: "Character 2" },
-      { tag: "@char3", label: "Character 3" },
-      { tag: "@character1", label: "Character 1 (Full)" },
-      { tag: "@character2", label: "Character 2 (Full)" },
-      { tag: "@character3", label: "Character 3 (Full)" }
+      { tag: "@char3", label: "Character 3" }
     ];
 
     let activeIndex = 0;
@@ -1445,7 +1281,7 @@ class TimelineEditor {
       const rect = input.getBoundingClientRect();
       return {
         left: rect.left,
-        top: rect.bottom + window.scrollY + 2
+        top: rect.bottom + 2
       };
     };
 
@@ -1534,7 +1370,7 @@ class TimelineEditor {
       const textBeforeCursor = text.slice(0, cursor);
       const lastAt = textBeforeCursor.lastIndexOf("@");
 
-      if (lastAt !== -1 && lastAt >= textBeforeCursor.search(/\s[^\s]*$/)) {
+      if (lastAt !== -1 && (lastAt === 0 || textBeforeCursor[lastAt - 1] === " ")) {
         showMenu = true;
         queryStart = lastAt;
         updateMenu();
@@ -1935,19 +1771,13 @@ class TimelineEditor {
 
     this.ctx.clearRect(0, 0, width, height);
 
-
-
     // Render Track Backgrounds
     this.ctx.fillStyle = "#111"; // Image track bg
     this.ctx.fillRect(0, RULER_HEIGHT, width, this.blockHeight);
     this.ctx.fillStyle = "#111"; // Audio track bg
     this.ctx.fillRect(0, RULER_HEIGHT + this.blockHeight, width, this.audioTrackHeight);
 
-
-
     // Determine which track the preview belongs to.
-    // _ghostTrack is set during HTML file drag-and-drop.
-    // During canvas mouse drags, _ghostTrack is null, so fall back to selectionType.
     const previewIsAudio = this._ghostTrack === 'audio' ||
       (this._previewSegments && this._ghostTrack === null && this.selectionType === 'audio');
 
@@ -1956,8 +1786,6 @@ class TimelineEditor {
 
     let renderAudioSegments = (this._previewSegments && previewIsAudio)
       ? this._previewSegments : this.timeline.audioSegments;
-
-
 
     const activeSegId = this.timeline.segments[this.selectedIndex]?.id;
     const activeAudioSegId = this.timeline.audioSegments[this.selectedIndex]?.id;
@@ -2139,10 +1967,10 @@ class TimelineEditor {
         this.ctx.strokeRect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
         this.ctx.fillStyle = "#fff";
         this.ctx.beginPath();
-        this.ctx.roundRect(startX, RULER_HEIGHT + this.blockHeight / 2 - 12, 4, 24, 2);
+        this.ctx.roundRect(startX, RULER_HEIGHT + this.blockHeight / 2 - 12, 4, 24, 2); // Native roundRect
         this.ctx.fill();
         this.ctx.beginPath();
-        this.ctx.roundRect(startX + pxWidth - 4, RULER_HEIGHT + this.blockHeight / 2 - 12, 4, 24, 2);
+        this.ctx.roundRect(startX + pxWidth - 4, RULER_HEIGHT + this.blockHeight / 2 - 12, 4, 24, 2); // Native roundRect
         this.ctx.fill();
       } else {
         this.ctx.strokeStyle = "#000";
@@ -2282,7 +2110,7 @@ class TimelineEditor {
         const BTN_W = 18;
         const BTN_H = 18;
         this.ctx.beginPath();
-        this.ctx.roundRect(gap.centerX - BTN_W / 2, gap.centerY - BTN_H / 2, BTN_W, BTN_H, 4);
+        this.ctx.roundRect(gap.centerX - BTN_W / 2, gap.centerY - BTN_H / 2, BTN_W, BTN_H, 4); // Native roundRect
         this.ctx.fillStyle = hov ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.05)";
         this.ctx.fill();
         this.ctx.fillStyle = hov ? "#fff" : "#888";
@@ -2294,30 +2122,13 @@ class TimelineEditor {
     }
 
     // --- Out-of-duration shadow overlay ---
-    // Draw a translucent black mask over the region beyond the actual output duration
-    // so the user can clearly see which content will be included in the render.
     const outputFrames = this.getDurationFrames();
     if (outputFrames < totalFrames) {
       const cutoffX = (outputFrames / totalFrames) * width;
-      // Semi-transparent black overlay on both tracks
       this.ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
       this.ctx.fillRect(cutoffX, RULER_HEIGHT, width - cutoffX, this.blockHeight + this.audioTrackHeight);
-      // Subtle tinted ruler overlay
       this.ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
       this.ctx.fillRect(cutoffX, 0, width - cutoffX, RULER_HEIGHT);
-      /*
-      // Dashed boundary line at the output duration cutoff
-      this.ctx.save();
-      this.ctx.strokeStyle = "rgba(255, 80, 80, 0.7)";
-      this.ctx.lineWidth = 1.5;
-      this.ctx.setLineDash([5, 4]);
-      this.ctx.beginPath();
-      this.ctx.moveTo(cutoffX, 0);
-      this.ctx.lineTo(cutoffX, CANVAS_HEIGHT);
-      this.ctx.stroke();
-      this.ctx.setLineDash([]);
-      this.ctx.restore();
-      */
     }
 
     // --- Draw Playhead ---
@@ -2349,7 +2160,7 @@ class TimelineEditor {
     
     this.ctx.fillStyle = "rgba(40, 40, 40, 0.6)";
     this.ctx.beginPath();
-    this.ctx.roundRect(grabBarX, grabBarY, grabBarW, grabBarH, 2);
+    this.ctx.roundRect(grabBarX, grabBarY, grabBarW, grabBarH, 2); // Native roundRect
     this.ctx.fill();
 
     // Draw horizontal grab bar at the bottom of viewport for resizing height
@@ -2360,7 +2171,7 @@ class TimelineEditor {
     
     this.ctx.fillStyle = "rgba(20, 20, 20, 0.8)";
     this.ctx.beginPath();
-    this.ctx.roundRect(hBarX, hBarY, hBarW, hBarH, 2);
+    this.ctx.roundRect(hBarX, hBarY, hBarW, hBarH, 2); // Native roundRect
     this.ctx.fill();
 
     this.updatePlayerUI();
@@ -2398,10 +2209,10 @@ class TimelineEditor {
     if (isSelected) {
       ctx.fillStyle = "#4fff8f";
       ctx.beginPath();
-      ctx.roundRect(startX, yOffset + trackHeight / 2 - 12, 4, 24, 2);
+      ctx.roundRect(startX, yOffset + trackHeight / 2 - 12, 4, 24, 2); // Native roundRect
       ctx.fill();
       ctx.beginPath();
-      ctx.roundRect(startX + pxWidth - 4, yOffset + trackHeight / 2 - 12, 4, 24, 2);
+      ctx.roundRect(startX + pxWidth - 4, yOffset + trackHeight / 2 - 12, 4, 24, 2); // Native roundRect
       ctx.fill();
     }
 
@@ -2427,7 +2238,6 @@ class TimelineEditor {
     ctx.restore();
   }
 
-
   // --- Interaction Logic ---
   getHitTest(mouseX, mouseY) {
     const width = this.canvas.offsetWidth;
@@ -2450,8 +2260,6 @@ class TimelineEditor {
     const trackType = isAudioTrack ? "audio" : "image";
 
     if (trackSegments.length === 0) return null;
-
-    // The variables width and totalFrames are already declared above.
 
     let sortedSegments = [...trackSegments]
       .map((s, i) => ({ ...s, originalIndex: i }))
@@ -2760,10 +2568,8 @@ class TimelineEditor {
 
         if (this.selectionType === "audio") {
           // Drag LEFT: right clip extends left by un-trimming its head.
-          // Can only un-trim as much as the right clip has been trimmed (trimStart >= 0).
           maxDeltaLeft = Math.min(maxDeltaLeft, origRight.trimStart || 0);
           // Drag RIGHT: left clip extends right by consuming its remaining tail audio.
-          // Can only extend as far as the left clip's unplayed tail allows.
           let availLeftTail = (origLeft.audioDurationFrames || origLeft.length) - ((origLeft.trimStart || 0) + origLeft.length);
           maxDeltaRight = Math.min(maxDeltaRight, availLeftTail);
         }
@@ -2824,7 +2630,7 @@ class TimelineEditor {
         let initT = this._dragInitialTimeline;
         let dIdx = initT.findIndex(s => s.id === this._dragTargetId);
         if (dIdx < 0) return;
-        let D = JSON.parse(JSON.stringify(initT[dIdx]));
+        let D = JSON.parse(JSON.stringify(initT[dIdx])); // Correctly deep cloned, restoring smooth drag physics
 
         let D_mouse_start = D.start + dragDelta;
         let mouseFrameX = mouseX * (totalFrames / logicalWidth);
@@ -2916,8 +2722,7 @@ class TimelineEditor {
 
     return result;
   }
-
-  onMouseUp(e) {
+onMouseUp(e) {
     document.body.style.userSelect = "";
     if (this._isDragging) {
       if (this._previewSegments) {
@@ -2957,18 +2762,11 @@ class TimelineEditor {
     let currentCursor = 0;
     const durationFrames = this.getDurationFrames();
 
-    // Build segment lengths clipped at the duration cutoff.
-    // - Gaps before the first segment, or between segments, are absorbed into the adjacent
-    //   segment's length (same as before), but are also clipped at durationFrames.
-    // - Segments that start at or past the cutoff are excluded entirely.
-    // - Segments that cross the cutoff are trimmed so their end = durationFrames exactly.
     let pendingGap = 0;
     for (let seg of sortedSegments) {
-      // Skip segments entirely outside the duration.
       if (seg.start >= durationFrames) break;
 
       if (seg.start > currentCursor) {
-        // Gap between the cursor and this segment — clip it at the cutoff too.
         const gapLength = Math.min(seg.start, durationFrames) - currentCursor;
         if (contiguousLengths.length > 0) {
           contiguousLengths[contiguousLengths.length - 1] += gapLength;
@@ -2977,17 +2775,15 @@ class TimelineEditor {
         }
       }
 
-      // Clip segment end at the duration cutoff.
       const clippedEnd = Math.min(seg.start + seg.length, durationFrames);
       const clippedLength = clippedEnd - seg.start;
 
       contiguousLengths.push(clippedLength + pendingGap);
       contiguousPrompts.push(seg.prompt || "");
       pendingGap = 0;
-      currentCursor = seg.start + seg.length; // advance by the real (unclipped) end for gap detection
+      currentCursor = seg.start + seg.length; 
     }
 
-    // If segments don't fill to the end of the duration, pad the last segment to reach it.
     const clampedCursor = Math.min(currentCursor, durationFrames);
     if (contiguousLengths.length > 0 && clampedCursor < durationFrames) {
       contiguousLengths[contiguousLengths.length - 1] += durationFrames - clampedCursor;
@@ -2998,7 +2794,8 @@ class TimelineEditor {
         const { imgObj, ...rest } = s;
         return rest;
       }),
-      audioSegments: (this.timeline.audioSegments || []).map(s => ({ ...s }))
+      audioSegments: (this.timeline.audioSegments || []).map(s => ({ ...s })),
+      characters: (this.timeline.characters || []).map(c => ({ ...c }))
     };
 
     const jsonStr = JSON.stringify(toSave);
@@ -3018,7 +2815,6 @@ class TimelineEditor {
       this.guideStrengthWidget.value = imgStrengths.join(",");
     }
 
-    // Keep zoom slider max in sync with the current timeline duration.
     this.updateZoomSliderMax();
 
     setTimeout(() => {
@@ -3247,7 +3043,7 @@ class TimelineEditor {
 
     setTimeout(() => {
       this._contextMenuDismisser = (ev) => { if (!menu.contains(ev.target)) this.dismissContextMenu(); };
-      document.addEventListener("pointerdown", this._contextMenuDismisser, true);
+      window.addEventListener("mousedown", this._contextMenuDismisser, true); // capture-phase listener resolves Comfy canvas clicks
     }, 0);
   }
 
@@ -3315,12 +3111,13 @@ class TimelineEditor {
     this._contextMenu = menu;
     setTimeout(() => {
       this._contextMenuDismisser = (ev) => { if (!menu.contains(ev.target)) this.dismissContextMenu(); };
-      document.addEventListener("pointerdown", this._contextMenuDismisser, true);
+      window.addEventListener("mousedown", this._contextMenuDismisser, true); // capture-phase listener resolves Comfy canvas clicks
     }, 0);
   }
+
   dismissContextMenu() {
     if (this._contextMenu) { this._contextMenu.remove(); this._contextMenu = null; }
-    if (this._contextMenuDismisser) { document.removeEventListener("pointerdown", this._contextMenuDismisser, true); this._contextMenuDismisser = null; }
+    if (this._contextMenuDismisser) { window.removeEventListener("mousedown", this._contextMenuDismisser, true); this._contextMenuDismisser = null; }
   }
 
   // --- Gap Popup Menu ---
@@ -3389,29 +3186,25 @@ class TimelineEditor {
     this._gapMenu = menu;
     setTimeout(() => {
       this._gapMenuDismisser = (ev) => { if (!menu.contains(ev.target)) this.dismissGapMenu(); };
-      document.addEventListener("pointerdown", this._gapMenuDismisser, true);
+      window.addEventListener("mousedown", this._gapMenuDismisser, true);
     }, 0);
   }
 
   dismissGapMenu() {
     if (this._gapMenu) { this._gapMenu.remove(); this._gapMenu = null; }
-    if (this._gapMenuDismisser) { document.removeEventListener("pointerdown", this._gapMenuDismisser, true); this._gapMenuDismisser = null; }
+    if (this._gapMenuDismisser) { window.removeEventListener("mousedown", this._gapMenuDismisser, true); this._gapMenuDismisser = null; }
   }
 
   // --- Settings Menu ---
-  // Widgets that are managed by the settings menu (hidden from node by default).
   get _settingsWidgetNames() {
     return ["display_mode", "epsilon", "divisible_by", "img_compression"];
   }
 
-  // Hide all settings widgets on the node (called on init).
   hideSettingsWidgets() {
     for (const name of this._settingsWidgetNames) {
-      const w = this.node.widgets?.find(w => w.name === name);
+      const w = this.node.widgets?.find(x => x.name === name);
       if (w) hideWidget(w);
 
-      // Also remove corresponding input slot if it exists and is NOT connected
-      // to prevent overlapping issues in classic ComfyUI (nodes v1)
       if (this.node.inputs) {
         const inputIdx = this.node.inputs.findIndex(i => i.name === name);
         if (inputIdx !== -1) {
@@ -3424,7 +3217,6 @@ class TimelineEditor {
     }
     this.updateWidgetVisibility();
 
-    // Workaround: toggle display mode to force ComfyUI to refresh the node
     if (this.displayModeWidget) {
       const origVal = this.displayModeWidget.value;
       const otherVal = origVal === "frames" ? "seconds" : "frames";
@@ -3437,10 +3229,9 @@ class TimelineEditor {
     }
   }
 
-  // Restore all settings widgets on the node.
   showSettingsWidgets() {
     for (const name of this._settingsWidgetNames) {
-      const w = this.node.widgets?.find(w => w.name === name);
+      const w = this.node.widgets?.find(x => x.name === name);
       if (!w) continue;
       
       const typeMap = {
@@ -3455,7 +3246,6 @@ class TimelineEditor {
     }
     this.updateWidgetVisibility();
 
-    // Workaround: toggle display mode to force ComfyUI to refresh the node
     if (this.displayModeWidget) {
       const origVal = this.displayModeWidget.value;
       const otherVal = origVal === "frames" ? "seconds" : "frames";
@@ -3484,7 +3274,6 @@ class TimelineEditor {
     const menu = document.createElement("div");
     menu.className = "pr-settings-menu";
 
-    // Title & Close Button Container
     const titleContainer = document.createElement("div");
     titleContainer.className = "pr-settings-title";
     titleContainer.style.display = "flex";
@@ -3504,7 +3293,6 @@ class TimelineEditor {
 
     menu.appendChild(titleContainer);
 
-    // Helper: fire a widget's callback safely
     const fireCallback = (w, val) => {
       w.value = val;
       if (w.callback) {
@@ -3513,7 +3301,6 @@ class TimelineEditor {
       if (window.app && window.app.graph) window.app.graph.setDirtyCanvas(true, true);
     };
 
-    // --- Display Mode ---
     const dmWidget = this.node.widgets?.find(w => w.name === "display_mode");
     if (dmWidget) {
       const ctrl = document.createElement("div");
@@ -3542,7 +3329,6 @@ class TimelineEditor {
       const onSegClick = (val) => {
         fireCallback(dmWidget, val);
         updateActive(val);
-        // Update ruler/timecode immediately
         if (this.updateWidgetVisibility) this.updateWidgetVisibility();
         if (this.updateUIFromSelection) this.updateUIFromSelection();
         this.render();
@@ -3561,7 +3347,6 @@ class TimelineEditor {
     divider1.className = "pr-settings-divider";
     menu.appendChild(divider1);
 
-    // Helper to create scrubbable number control with horizontal buttons
     const createScrubbableNumberControl = (w, step, min, max, isFloat = false) => {
       const container = document.createElement("div");
       container.className = "pr-number-control";
@@ -3605,18 +3390,13 @@ class TimelineEditor {
         fireCallback(w, parseFloat(inp.value));
       });
 
-      // Dragging logic
-      let isDragging = false;
-      let startX = 0;
-      let startVal = 0;
-      let hasMoved = false;
-
       inp.style.cursor = "ew-resize";
 
       inp.addEventListener("mousedown", (e) => {
-        startX = e.clientX;
-        startVal = parseFloat(inp.value);
-        hasMoved = false;
+        let startX = e.clientX;
+        let startVal = parseFloat(inp.value);
+        let hasMoved = false;
+        let isDragging = false;
 
         const onMouseMove = (moveEvent) => {
           const deltaX = moveEvent.clientX - startX;
@@ -3633,7 +3413,7 @@ class TimelineEditor {
             if (newVal < min) newVal = min;
             if (newVal > max) newVal = max;
 
-            inp.value = isFloat ? newVal.toFixed(4) : Math.round(newVal);
+            inp.value = isFloat ? newVal.toFixed(4) : Math.round(newVal); 
             fireCallback(w, parseFloat(inp.value));
           }
         };
@@ -3660,25 +3440,21 @@ class TimelineEditor {
       return container;
     };
 
-    // --- Epsilon ---
     const epsWidget = this.node.widgets?.find(w => w.name === "epsilon");
     if (epsWidget) {
       menu.appendChild(this._makeSettingRow("Epsilon", createScrubbableNumberControl(epsWidget, 0.0001, 0.0001, 0.99, true)));
     }
 
-    // --- Divisible By ---
     const divByWidget = this.node.widgets?.find(w => w.name === "divisible_by");
     if (divByWidget) {
       menu.appendChild(this._makeSettingRow("Divisible By", createScrubbableNumberControl(divByWidget, 1, 1, 256, false)));
     }
 
-    // --- Img Compression ---
     const compWidget = this.node.widgets?.find(w => w.name === "img_compression");
     if (compWidget) {
       menu.appendChild(this._makeSettingRow("Img Compression", createScrubbableNumberControl(compWidget, 1, 0, 100, false)));
     }
 
-    // --- Global Prompt Toggle ---
     const globalPromptWidget = this.node.widgets?.find(w => w.name === "global_prompt");
     if (globalPromptWidget) {
       const cb = document.createElement("input");
@@ -3688,9 +3464,9 @@ class TimelineEditor {
       cb.addEventListener("change", () => {
         const isVisible = cb.checked;
         if (!globalPromptWidget.options) globalPromptWidget.options = {};
-        globalPromptWidget.options.hidden = !isVisible;
+        globalPromptWidget.options.hidden = !isVisible; // Replaced buggy 'visible' reference with isVisible
 
-        if (isVisible) {
+        if (isVisible) { // Replaced buggy 'visible' reference with isVisible
           delete globalPromptWidget.computeSize;
           globalPromptWidget.hidden = false;
           if (globalPromptWidget.element) globalPromptWidget.element.style.display = "";
@@ -3700,7 +3476,6 @@ class TimelineEditor {
           if (globalPromptWidget.element) globalPromptWidget.element.style.display = "none";
         }
 
-        // Force refresh via display mode double-toggle trick
         if (this.displayModeWidget) {
           const origVal = this.displayModeWidget.value;
           const otherVal = origVal === "frames" ? "seconds" : "frames";
@@ -3713,8 +3488,6 @@ class TimelineEditor {
       menu.appendChild(this._makeSettingRow("Use Global Prompt", cb));
     }
 
-
-    // --- Show/Hide on Node Toggle ---
     const toggleBtn = document.createElement("button");
     toggleBtn.className = "pr-settings-toggle-btn";
     const widgetsVisible = !!(this.node.widgets?.find(w => w.name === "display_mode" && !(w.options && w.options.hidden)));
@@ -3731,7 +3504,6 @@ class TimelineEditor {
     });
     menu.appendChild(toggleBtn);
 
-    // Position the menu below the anchor button (pop down)
     document.body.appendChild(menu);
     const rect = anchorEl.getBoundingClientRect();
     const menuW = menu.offsetWidth || 230;
@@ -3739,7 +3511,6 @@ class TimelineEditor {
     let left = rect.right - menuW;
     let top = rect.bottom + 6;
     if (left < 4) left = 4;
-    // Fallback to top if it overflows the bottom of the screen
     if (top + menuH > window.innerHeight - 4) {
       top = rect.top - menuH - 6;
     }
@@ -3751,13 +3522,13 @@ class TimelineEditor {
       this._settingsDismisser = (ev) => {
         if (!menu.contains(ev.target) && !anchorEl.contains(ev.target)) this.dismissSettingsMenu();
       };
-      document.addEventListener("mousedown", this._settingsDismisser);
+      window.addEventListener("mousedown", this._settingsDismisser, true);
     }, 0);
   }
 
   dismissSettingsMenu() {
     if (this._settingsMenu) { this._settingsMenu.remove(); this._settingsMenu = null; }
-    if (this._settingsDismisser) { document.removeEventListener("mousedown", this._settingsDismisser); this._settingsDismisser = null; }
+    if (this._settingsDismisser) { window.removeEventListener("mousedown", this._settingsDismisser, true); this._settingsDismisser = null; }
   }
 
 
@@ -3777,14 +3548,13 @@ class TimelineEditor {
 
   addTextSegmentFreeSpace() {
     const frameRate = this.getFrameRate();
-    const newLength = Math.max(1, frameRate); // 1 second default
+    const newLength = Math.max(1, frameRate); 
     const sorted = [...this.timeline.segments].sort((a, b) => a.start - b.start);
     let newStart = 0;
     for (const seg of sorted) {
       if (newStart + newLength <= seg.start) break;
       newStart = Math.max(newStart, seg.start + seg.length);
     }
-    // Place the segment at the first free slot in the visual timeline (no output duration change).
     const durationFrames = this.getVisualDurationFrames();
     const seg = {
       id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
@@ -3799,7 +3569,6 @@ class TimelineEditor {
     this.commitChanges();
   }
 
-  // --- Audio Player Engine ---
   updatePlayerUI() {
     if (!this.playBtn || !this.loopBtn) return;
     this.playBtn.innerHTML = this.isPlaying ? ICONS.pause : ICONS.play;
@@ -3834,7 +3603,7 @@ class TimelineEditor {
   }
 
   async playAudio() {
-    this.pauseAudio(true); // clear any existing playback, but don't suspend context if scrubbing
+    this.pauseAudio(true); 
 
     this._playCounter = (this._playCounter || 0) + 1;
     const playId = this._playCounter;
@@ -3855,7 +3624,6 @@ class TimelineEditor {
     this.playbackStartFrame = this.currentFrame;
     this.playbackStartTime = this.audioContext.currentTime;
 
-    // Decode and schedule all audio segments that happen AT or AFTER currentFrame
     for (let seg of this.timeline.audioSegments) {
       const segStartFrame = seg.start;
       const segEndFrame = seg.start + seg.length;
@@ -3863,7 +3631,6 @@ class TimelineEditor {
       if (segEndFrame <= this.currentFrame) continue;
 
       try {
-        // Build audio buffer: fetch from server URL if audioFile is set, otherwise fall back to audioB64
         let audioBuffer;
         if (seg.audioFile) {
           const audioUrl = api.apiURL(`/view?filename=${encodeURIComponent(seg.audioFile.split("/").pop())}&type=input&subfolder=${encodeURIComponent(seg.audioFile.includes("/") ? seg.audioFile.split("/").slice(0, -1).join("/") : "")}`);
@@ -3874,7 +3641,7 @@ class TimelineEditor {
           const binaryString = window.atob(seg.audioB64);
           const len = binaryString.length;
           const bytes = new Uint8Array(len);
-          for (let i = 0; i < len; i++) {
+          for (let i = 0; i < binaryString.length; i++) {
             bytes[i] = binaryString.charCodeAt(i);
           }
           audioBuffer = await this.audioContext.decodeAudioData(bytes.buffer);
@@ -3925,7 +3692,7 @@ class TimelineEditor {
         const loopBound = (this.playbackStartFrame >= durationFrames) ? visualDurationFrames : durationFrames;
         if (this.currentFrame >= loopBound) {
           this.currentFrame = 0;
-          this.playAudio(); // Restart playback
+          this.playAudio(); 
           return;
         }
       } else {
@@ -3967,12 +3734,6 @@ class TimelineEditor {
 }
 
 // --- Node Registration Hooks ---
-const APPENDED_WIDGET_DEFAULTS = [
-  ["timeline_data", "{}"],
-  ["local_prompts", ""],
-  ["segment_lengths", ""],
-];
-
 app.registerExtension({
   name: "LTXDirector",
   async beforeRegisterNodeDef(nodeType, nodeData, app) {
@@ -3980,40 +3741,36 @@ app.registerExtension({
 
       const onNodeCreated = nodeType.prototype.onNodeCreated;
       nodeType.prototype.onNodeCreated = function () {
-        if (onNodeCreated) onNodeCreated.apply(this, arguments);
+        const self = this;
+        if (onNodeCreated) onNodeCreated.apply(self, arguments);
 
         for (const [name, def] of APPENDED_WIDGET_DEFAULTS) {
-          if (!this.widgets?.find(w => w.name === name)) {
-            this.addWidget("string", name, def, () => { });
+          if (!self.widgets?.find(w => w.name === name)) {
+            self.addWidget("string", name, def, () => { });
           }
         }
-        for (const w of this.widgets) {
+        for (const w of self.widgets) {
           if (HIDDEN_WIDGET_NAMES.includes(w.name)) hideWidget(w);
         }
 
-        // Set default width to be wider on creation (approx 2.5x default ~220px)
-        this.size[0] = 1000;
+        self.size[0] = 1000;
 
-        // Force default for img_compression if not set (ComfyUI sometimes skips optional defaults)
-        const compWidget = this.widgets?.find(w => w.name === "img_compression");
+        const compWidget = self.widgets?.find(w => w.name === "img_compression");
         if (compWidget && (compWidget.value === undefined || compWidget.value === null || compWidget.value === 0)) {
           compWidget.value = 18;
         }
-
-        // Global Prompt is now left completely visible on creation!
         
         const container = document.createElement("div");
-        const widget = this.addDOMWidget("timeline_ui", "timeline_ui", container, {
+        const widget = self.addDOMWidget("timeline_ui", "timeline_ui", container, {
           getValue: () => "",
           setValue: () => { },
         });
 
         widget.computeSize = function (width) {
           const canvasH = self._timelineEditor ? self._timelineEditor.canvasHeight : CANVAS_HEIGHT;
-          return [width, canvasH + 235];
+          return [width, canvasH + 340];
         };
 
-        const self = this;
         setTimeout(() => {
           try {
             self._timelineEditor = new TimelineEditor(self, container, widget);
@@ -4032,15 +3789,18 @@ app.registerExtension({
       const onConfigure = nodeType.prototype.onConfigure;
       nodeType.prototype.onConfigure = function (info) {
         const out = onConfigure?.apply(this, arguments);
-        for (const [name, def] of APPENDED_WIDGET_DEFAULTS) {
-          const w = this.widgets.find(x => x.name === name);
-          if (w && (w.value == null || w.value === "")) w.value = def;
+        if (this.widgets) {
+          for (const [name, def] of APPENDED_WIDGET_DEFAULTS) {
+            const w = this.widgets.find(x => x.name === name);
+            if (w && (w.value == null || w.value === "")) w.value = def;
+          }
         }
 
         setTimeout(() => {
           if (this._timelineEditor) {
             this._timelineEditor.timeline = parseInitial(this._timelineEditor.timelineDataWidget?.value);
             this._timelineEditor.loadImages();
+            this._timelineEditor.updateCharacterSlotsUI();
             this._timelineEditor.selectionType = "image";
             this._timelineEditor.selectedIndex = clamp(
               this._timelineEditor.selectedIndex, -1,

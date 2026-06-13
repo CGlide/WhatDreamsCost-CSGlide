@@ -1,5 +1,3 @@
-# --- START OF FILE ltx_director.py ---
-
 import logging
 import json
 import base64
@@ -209,9 +207,91 @@ except Exception as e:
     log.warning(f"[PromptRelay] Could not register /ltx_director/export_timeline endpoint: {e}")
 
 
+# Register API endpoint for instant character analysis via local Ollama
+try:
+    import server
+    from aiohttp import web
+    import aiohttp
+
+    @server.PromptServer.instance.routes.post("/ltx_director/analyze_character")
+    async def analyze_character_endpoint(request):
+        try:
+            data = await request.json()
+            image_b64 = data.get("image_b64", "")
+            char_index = int(data.get("char_index", 0))
+
+            if not image_b64:
+                return web.json_response({"status": "error", "message": "No image provided for analysis."})
+
+            b64_list = image_b64 if isinstance(image_b64, list) else [image_b64]
+            cleaned_b64_list = []
+            for b64 in b64_list:
+                if "," in b64:
+                    b64 = b64.split(",", 1)[1]
+                cleaned_b64_list.append(b64)
+
+            if not cleaned_b64_list:
+                return web.json_response({"status": "error", "message": "No valid base64 images decoded."})
+
+            # Configured to use huihui_ai/qwen3.5-abliterated:2b on Ollama
+            model_name = "huihui_ai/qwen3.5-abliterated:2b"
+            
+            # Detailed visual prompt for high-fidelity descriptions
+            prompt = (
+                "Describe the character's physical appearance in two concise sentences. "
+                "Specify their hair color/style, face details, and their clothing type/color. "
+                "Keep the entire response very brief."
+            )
+
+            log.info(f"[PromptRelay] Analyzing Character {char_index+1} with local Ollama model '{model_name}'...")
+
+            payload = {
+                "model": model_name,
+                "prompt": prompt,
+                "images": cleaned_b64_list,
+                "stream": False,
+                "keep_alive": 0  # Fixed: Immediately unloads the model from VRAM after generating the description
+            }
+
+            ollama_url = "http://127.0.0.1:11434/api/generate"
+            
+            # Send the request asynchronously to Ollama without blocking ComfyUI's main thread
+            async with aiohttp.ClientSession() as session:
+                try:
+                    async with session.post(ollama_url, json=payload, timeout=60) as response:
+                        if response.status != 200:
+                            err_txt = await response.text()
+                            return web.json_response({
+                                "status": "error", 
+                                "message": f"Ollama returned HTTP {response.status}: {err_txt}"
+                            })
+                        
+                        resp_json = await response.json()
+                        generated_text = resp_json.get("response", "").strip()
+                except aiohttp.ClientConnectorError:
+                    return web.json_response({
+                        "status": "error", 
+                        "message": (
+                            "Could not connect to Ollama. Please ensure Ollama is installed, "
+                            "running in the background, and that you have pulled the model "
+                            "via 'ollama run huihui_ai/qwen3.5-abliterated:2b' in your terminal."
+                        )
+                    })
+
+            if "<think>" in generated_text:
+                generated_text = generated_text.split("</think>")[-1].strip()
+
+            log.info(f"[PromptRelay] Analysis complete: {generated_text}")
+            return web.json_response({"status": "success", "description": generated_text})
+
+        except Exception as e:
+            log.error(f"[PromptRelay] Failed to analyze character: {e}")
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+except Exception as e:
+    log.warning(f"[PromptRelay] Could not register /ltx_director/analyze_character endpoint: {e}")
+
+
 def _load_image_tensor(seg: dict) -> torch.Tensor:
-    """Decode an image from the ComfyUI input folder (if imageFile provided) or fallback to base64
-    to a ComfyUI-style image tensor of shape [1, H, W, 3], float32 in [0, 1]."""
     if seg.get("imageFile"):
         file_path = os.path.join(folder_paths.get_input_directory(), seg["imageFile"])
         if os.path.exists(file_path):
@@ -236,8 +316,6 @@ def _load_image_tensor(seg: dict) -> torch.Tensor:
 
 
 def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: str, divisible_by: int) -> torch.Tensor:
-    """Resize a [1, H, W, 3] float32 tensor to target dimensions using the given method,
-    then snap the final dimensions to be divisible by `divisible_by`."""
     from PIL import Image as _PilImage
     import torchvision.transforms.functional as TF
 
@@ -253,7 +331,6 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
 
     if method == "stretch to fit":
         resized = pil.resize((tw, th), _PilImage.LANCZOS)
-
     elif method == "maintain aspect ratio":
         ratio = min(tw / src_w, th / src_h)
         new_w = int(src_w * ratio)
@@ -261,7 +338,6 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
         new_w = snap(new_w, divisible_by)
         new_h = snap(new_h, divisible_by)
         resized = pil.resize((new_w, new_h), _PilImage.LANCZOS)
-
     elif method == "pad":
         ratio = min(tw / src_w, th / src_h)
         new_w = snap(int(src_w * ratio), divisible_by)
@@ -269,7 +345,6 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
         inner = pil.resize((new_w, new_h), _PilImage.LANCZOS)
         resized = _PilImage.new("RGB", (tw, th), (0, 0, 0))
         resized.paste(inner, ((tw - new_w) // 2, (th - new_h) // 2))
-
     elif method == "crop":
         ratio = max(tw / src_w, th / src_h)
         new_w = int(src_w * ratio)
@@ -278,7 +353,6 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
         left = (new_w - tw) // 2
         top = (new_h - th) // 2
         resized = inner.crop((left, top, left + tw, top + th))
-
     else:
         resized = pil.resize((tw, th), _PilImage.LANCZOS)
 
@@ -287,15 +361,12 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
 
 
 def _compress_image(tensor: torch.Tensor, crf: int) -> torch.Tensor:
-    """Apply H.264 compression artefacts to a [1, H, W, 3] float32 tensor (ComfyUI image format).
-    crf=0 means no compression. Uses PyAV to encode/decode a single frame in-memory."""
     if crf == 0:
         return tensor
-    img = tensor[0]  # [H, W, 3]
-    # Dimensions must be even for H.264
+    img = tensor[0] 
     h = (img.shape[0] // 2) * 2
     w = (img.shape[1] // 2) * 2
-    img_np = (img[:h, :w] * 255.0).byte().cpu().numpy()  # uint8 [H, W, 3]
+    img_np = (img[:h, :w] * 255.0).byte().cpu().numpy() 
 
     try:
         buf = _io.BytesIO()
@@ -316,14 +387,13 @@ def _compress_image(tensor: torch.Tensor, crf: int) -> torch.Tensor:
         container_r = av.open(buf, mode="r")
         decoded = None
         for frame_r in container_r.decode(video=0):
-            decoded = frame_r.to_ndarray(format="rgb24")  # [H, W, 3]
+            decoded = frame_r.to_ndarray(format="rgb24") 
             break
         container_r.close()
 
         if decoded is None:
             return tensor
         arr = torch.from_numpy(decoded.astype(np.float32) / 255.0).to(tensor.device, tensor.dtype)
-        # Re-embed into original tensor shape (may have been cropped by even-rounding)
         out = tensor.clone()
         out[0, :h, :w] = arr
         return out
@@ -333,9 +403,6 @@ def _compress_image(tensor: torch.Tensor, crf: int) -> torch.Tensor:
 
 
 def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_rate: float) -> dict:
-    """Parses timeline JSON, loads/trims audio directly from memory using PyAV, 
-    and aligns to a global timeline yielding ComfyUI's format.
-    Output length explicitly mimics the timeline's duration_frames length."""
     target_sr = 44100
     total_samples = max(1, int(math.ceil(duration_frames / frame_rate * target_sr)))
     empty_audio = {"waveform": torch.zeros((1, 2, total_samples), dtype=torch.float32), "sample_rate": target_sr}
@@ -378,11 +445,9 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
         try:
             clip_frames = []
             
-            # Use PyAV to decode directly from memory buffer
             with av.open(buffer) as container:
                 stream = container.streams.audio[0]
                 
-                # Setup resampler to ensure output is 44.1kHz, Stereo, Float32 Planar
                 resampler = av.AudioResampler(
                     format='fltp',
                     layout='stereo',
@@ -391,11 +456,9 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
                 
                 for frame in container.decode(stream):
                     for resampled_frame in resampler.resample(frame):
-                        # to_ndarray() on fltp gives shape (channels, samples)
                         arr = resampled_frame.to_ndarray()
                         clip_frames.append(torch.from_numpy(arr))
                 
-                # Flush the resampler to get any remaining samples
                 for resampled_frame in resampler.resample(None):
                     arr = resampled_frame.to_ndarray()
                     clip_frames.append(torch.from_numpy(arr))
@@ -403,10 +466,8 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
             if not clip_frames:
                 continue
 
-            # Concatenate all frame blocks along the samples dimension (dim 1)
-            waveform = torch.cat(clip_frames, dim=1) # Shape: [2, total_clip_samples]
+            waveform = torch.cat(clip_frames, dim=1) 
 
-            # Calculate interactive trim boundaries
             trim_start_frames = float(seg.get("trimStart", 0))
             length_frames = float(seg.get("length", 1))
             start_frames = float(seg.get("start", 0))
@@ -422,10 +483,8 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
             actual_length = end_sample_src - start_sample_src
             if actual_length <= 0: continue
 
-            # Extract the correct segment of the audio
             clip_waveform = waveform[:, start_sample_src:end_sample_src]
 
-            # Position onto the timeline
             start_sample_dst = int(start_frames / frame_rate * target_sr)
             
             if start_sample_dst >= out_waveform.shape[1]:
@@ -433,7 +492,6 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
                 
             end_sample_dst = start_sample_dst + actual_length
 
-            # Clip any trailing overflow so we don't index past the timeline bounds
             if end_sample_dst > out_waveform.shape[1]:
                 actual_length = out_waveform.shape[1] - start_sample_dst
                 clip_waveform = clip_waveform[:, :actual_length]
@@ -442,7 +500,6 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
             if actual_length <= 0:
                 continue
 
-            # Additive composite (allows clips overlapping to sum together naturally)
             out_waveform[:, start_sample_dst:end_sample_dst] += clip_waveform
 
         except Exception as e:
@@ -453,11 +510,6 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
 
 
 def _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames):
-    """Convert pixel-space segment lengths to integer latent-space lengths using the
-    largest-remainder method. Targets the full `latent_frames` when the pixel sum looks
-    like full coverage (within one stride of latent_frames * stride). Otherwise targets
-    round(total_pixel / temporal_stride) so partial-coverage timelines stay partial.
-    """
     if not pixel_lengths:
         return []
     total_pixel = sum(pixel_lengths)
@@ -466,7 +518,6 @@ def _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames):
 
     naive_total = max(1, round(total_pixel / temporal_stride))
     target_total = min(latent_frames, naive_total)
-    # Within one frame of full → user clearly intended full coverage; pin to latent_frames.
     if target_total >= latent_frames - 1:
         target_total = latent_frames
 
@@ -478,7 +529,6 @@ def _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames):
         for k in range(diff):
             result[order[k % len(order)]] += 1
 
-    # Ensure every segment has ≥ 1 latent frame (steal from the largest if needed).
     for i in range(len(result)):
         if result[i] < 1:
             max_idx = max(range(len(result)), key=lambda j: result[j])
@@ -501,10 +551,8 @@ def _encode_relay(model, clip, latent, global_prompt, local_prompts, segment_len
                 "Set the field to an empty string or fix the upstream connection."
             )
 
-    # Split prompts but do NOT filter out empty ones yet, so we can detect them
     locals_list = [p.strip() for p in local_prompts.split("|")]
     
-    # Check if any specific segment is empty
     for p in locals_list:
         if not p:
             raise ValueError("There is a segment on the timeline missing a prompt!")
@@ -565,6 +613,7 @@ class LTXDirector(io.ComfyNode):
             inputs=[
                 io.Model.Input("model"),
                 io.Clip.Input("clip"),
+                io.Vae.Input("vae", optional=True, tooltip="Optional. Connect the LTX Autoencoder/VAE here to natively encode the MSR visual reference slideshow into the latent prefix."),
                 io.Vae.Input("audio_vae", optional=True, tooltip="Optional. Connect an Audio VAE to generate audio latents."),
                 io.Latent.Input("optional_latent", optional=True, tooltip="Optional. Connect a latent to override the auto-generated one."),
                 io.String.Input("global_prompt", multiline=True, default="", tooltip="Conditions the entire video. Anchors persistent characters, objects, and scene context."),
@@ -584,26 +633,20 @@ class LTXDirector(io.ComfyNode):
                 io.Int.Input("divisible_by", default=32, min=1, max=256, step=1, tooltip="Snap the final output image dimensions to be divisible by this number (e.g. 32 for LTX)."),
                 io.Int.Input("img_compression", default=18, min=0, max=100, step=1, tooltip="H.264 CRF compression to apply to each guide image. 0 = no compression, higher = more artefacts."),
                 io.Boolean.Input("save_prompts_to_file", default=False, optional=True, tooltip="Save the timeline prompts and parameters to a text file in your ComfyUI output directory during execution."),
-                io.Image.Input("reference_image", optional=True, tooltip="Invisible character sheet/style reference. Can also be a Batch of images. Automatically appended to the sequence out-of-bounds."),
-                io.Image.Input("reference_image_2", optional=True, tooltip="Second optional reference image."),
-                io.Image.Input("reference_image_3", optional=True, tooltip="Third optional reference image."),
                 io.Float.Input("reference_strength", default=1.0, min=0.0, max=5.0, step=0.05, optional=True, tooltip="Guide strength for the reference images."),
-                
-                # New descriptive inputs for automatic under-the-hood character replacement
-                io.String.Input("char1_description", multiline=True, default="", optional=True, tooltip="Plug in a detailed description for @character1 / @char1. You can write it manually or connect a VLM/Caption node."),
-                io.String.Input("char2_description", multiline=True, default="", optional=True, tooltip="Plug in a detailed description for @character2 / @char2."),
-                io.String.Input("char3_description", multiline=True, default="", optional=True, tooltip="Plug in a detailed description for @character3 / @char3."),
+                io.Combo.Input("reference_mode", options=["Ghost Mask (End)", "Licon MSR (Prefix)"], default="Ghost Mask (End)", tooltip="Choose whether to hide the references at the end with attention masks (Ghost Mask) or stack them sequentially at the beginning (Licon MSR Prefix) for the MSR LoRA."),
+                io.Int.Input("msr_prefix_frames", default=17, min=1, max=120, step=1, tooltip="The number of visual slideshow frames to generate at the start of the sequence for MSR LoRA (typically 17, 25, 33, or 41)."),
             ],
             outputs=[
                 io.Model.Output(display_name="model"),
                 io.Conditioning.Output(display_name="positive"),
-                io.Latent.Output(display_name="video_latent", tooltip="Auto-generated LTXV empty latent (only populated when no latent is connected)."),
-                io.Latent.Output(display_name="audio_latent", tooltip="Auto-generated audio latent (uses custom audio if enabled)."),
+                io.Latent.Output(display_name="video_latent"),
+                io.Latent.Output(display_name="audio_latent"),
                 GuideData.Output(display_name="guide_data"),
-                io.Float.Output(display_name="frame_rate", tooltip="The frame rate used for the timeline."),
-                io.Audio.Output(display_name="combined_audio", tooltip="Combined timeline audio layout."),
-                io.Int.Output(display_name="clean_latent_frames", tooltip="Plug this into a CleanLatentSlice node 'length' to effortlessly cut off the invisible reference image."),
-                io.Int.Output(display_name="clean_pixel_frames", tooltip="Plug this into your Video Combine 'frame_load_cap' to effortlessly cut off the invisible reference image."),
+                io.Float.Output(display_name="frame_rate"),
+                io.Audio.Output(display_name="combined_audio"),
+                io.Int.Output(display_name="clean_latent_frames"),
+                io.Int.Output(display_name="clean_pixel_frames"),
             ],
         )
 
@@ -612,25 +655,62 @@ class LTXDirector(io.ComfyNode):
                 timeline_data, local_prompts, segment_lengths, guide_strength="", epsilon=1e-3,
                 frame_rate=24.0, display_mode="seconds",
                 custom_width=768, custom_height=512, resize_method="maintain aspect ratio",
-                divisible_by=32, img_compression=0, audio_vae=None, optional_latent=None,
+                divisible_by=32, img_compression=0, vae=None, audio_vae=None, optional_latent=None,
                 use_custom_audio=False, save_prompts_to_file=False,
-                reference_image=None, reference_image_2=None, reference_image_3=None, reference_strength=1.0,
-                char1_description="", char2_description="", char3_description="") -> io.NodeOutput:
+                reference_strength=1.0, reference_mode="Ghost Mask (End)", msr_prefix_frames=17) -> io.NodeOutput:
 
-        # --- Calculate Clean Output Bounds First ---
+        # Force Ollama to unload the vision model to maximize VRAM before generation begins
+        try:
+            import requests
+            unload_url = "http://127.0.0.1:11434/api/generate"
+            unload_payload = {
+                "model": "huihui_ai/qwen3.5-abliterated:2b",
+                "keep_alive": 0
+            }
+            requests.post(unload_url, json=unload_payload, timeout=2.0)
+            log.info("[PromptRelay] Dispatched VRAM eviction request to Ollama to maximize memory for LTX generation.")
+        except Exception as e:
+            log.debug("[PromptRelay] Ollama VRAM eviction skipped: %s", e)
+
         clean_pixel_frames = duration_frames + 1
         clean_latent_frames = ((clean_pixel_frames - 1) // 8) + 1
 
-        # --- Build guide_data from image segments FIRST (to derive output dimensions) ---
         guide_data = {"images": [], "insert_frames": [], "strengths": [], "frame_rate": float(frame_rate)}
         derived_w, derived_h = custom_width, custom_height
         
-        # Consolidate all reference inputs into a flat list, unraveling any image batches.
-        refs_to_process = []
-        for ref_input in (reference_image, reference_image_2, reference_image_3):
-            if ref_input is not None:
-                for i in range(ref_input.shape[0]):
-                    refs_to_process.append(ref_input[i:i+1])
+        char_images = []
+                    
+        # Extract Timeline Character Descriptions (Fallback) and process dropped style images
+        char1_val = ""
+        char2_val = ""
+        char3_val = ""
+        try:
+            tdata = json.loads(timeline_data) if timeline_data else {}
+            characters = tdata.get("characters", [])
+            
+            if len(characters) > 0: char1_val = characters[0].get("description", "")
+            if len(characters) > 1: char2_val = characters[1].get("description", "")
+            if len(characters) > 2: char3_val = characters[2].get("description", "")
+            
+            for idx, char_info in enumerate(characters):
+                images_list = char_info.get("images", [])
+                legacy_b64 = char_info.get("imageB64", "")
+                if legacy_b64 and not images_list:
+                    images_list = [{"b64": legacy_b64, "name": char_info.get("fileName", "")}]
+                    
+                for img_info in images_list:
+                    image_b64 = img_info.get("b64", "")
+                    if image_b64:
+                        if "," in image_b64:
+                            image_b64 = image_b64.split(",", 1)[1]
+                        img_bytes = base64.b64decode(image_b64)
+                        img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
+                        
+                        arr = np.array(img, dtype=np.float32) / 255.0
+                        tensor = torch.from_numpy(arr).unsqueeze(0)
+                        char_images.append(tensor)
+        except Exception as e:
+            log.warning("[PromptRelay] Could not process character slot inputs: %s", e)
                     
         try:
             tdata = json.loads(timeline_data) if timeline_data else {}
@@ -638,7 +718,7 @@ class LTXDirector(io.ComfyNode):
                 s for s in tdata.get("segments", [])
                 if s.get("type", "image") == "image"
                 and (s.get("imageFile") or s.get("imageB64"))
-                and int(s.get("start", 0)) < duration_frames  # exclude segments fully outside duration
+                and int(s.get("start", 0)) < duration_frames
             ]
             img_segs.sort(key=lambda s: s["start"])
 
@@ -648,51 +728,37 @@ class LTXDirector(io.ComfyNode):
 
             for idx, seg in enumerate(img_segs):
                 tensor = _load_image_tensor(seg)
-
-                # Apply resize
                 src_h, src_w = tensor.shape[1], tensor.shape[2]
 
                 def snap(val, div):
                     return max(div, (val // div) * div)
 
                 if custom_width > 0 and custom_height > 0:
-                    # Both dimensions set — apply selected resize_method (pad, crop, stretch, maintain AR)
                     tensor = _resize_image(tensor, custom_width, custom_height, resize_method, divisible_by)
                 elif custom_width > 0:
-                    # Width only — scale height from AR, snap both, then resize to exact dimensions
                     tgt_w = snap(custom_width, divisible_by)
                     tgt_h = snap(int(src_h * tgt_w / src_w), divisible_by)
                     tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by)
                 elif custom_height > 0:
-                    # Height only — scale width from AR, snap both, then resize to exact dimensions
                     tgt_h = snap(custom_height, divisible_by)
                     tgt_w = snap(int(src_w * tgt_h / src_h), divisible_by)
                     tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by)
                 else:
-                    # Both zero — keep original dimensions, just snap to divisible_by
                     tensor = _resize_image(tensor, src_w, src_h, "maintain aspect ratio", divisible_by)
 
-
-                # Apply compression
                 if img_compression > 0:
                     tensor = _compress_image(tensor, img_compression)
 
-                # Record dimensions of the first processed image for latent generation
                 if idx == 0:
                     derived_h = tensor.shape[1]
                     derived_w = tensor.shape[2]
 
                 strength = strengths[idx] if idx < len(strengths) else 1.0
                 guide_data["images"].append(tensor)
-                
-                # Keep timeline images at their exact timeline frames (no shifting)
                 guide_data["insert_frames"].append(int(seg["start"]))
-                
                 guide_data["strengths"].append(float(strength))
             
-            # If no images were loaded from the timeline, create a dummy image at strength 0
-            # to prevent artifacts in text-to-video mode.
-            if not guide_data["images"] and not refs_to_process:
+            if not guide_data["images"] and not char_images:
                 w = derived_w if derived_w > 0 else 768
                 h = derived_h if derived_h > 0 else 512
                 w = (w // 32) * 32
@@ -708,81 +774,134 @@ class LTXDirector(io.ComfyNode):
         except Exception as e:
             log.warning("[PromptRelay] Could not build guide_data: %s", e)
 
-        # --- Handle Reference Image Injection (End-Hiding) ---
-        if refs_to_process:
-            if optional_latent is not None:
-                log.warning("[PromptRelay] You connected reference images AND an external 'optional_latent'. Make sure your custom latent is long enough to fit the appended reference frames!")
+        # Initialize dimension checks
+        derived_w = max(32, (derived_w // 32) * 32) if derived_w > 0 else 768
+        derived_h = max(32, (derived_h // 32) * 32) if derived_h > 0 else 512
 
-            for i, single_ref in enumerate(refs_to_process):
-                src_h, src_w = single_ref.shape[1], single_ref.shape[2]
-                def snap(val, div): return max(div, (val // div) * div)
-                
-                if custom_width > 0 and custom_height > 0:
-                    ref_tensor = _resize_image(single_ref, custom_width, custom_height, resize_method, divisible_by)
-                elif custom_width > 0:
-                    tgt_w = snap(custom_width, divisible_by)
-                    tgt_h = snap(int(src_h * tgt_w / src_w), divisible_by)
-                    ref_tensor = _resize_image(single_ref, tgt_w, tgt_h, "stretch to fit", divisible_by)
-                elif custom_height > 0:
-                    tgt_h = snap(custom_height, divisible_by)
-                    tgt_w = snap(int(src_w * tgt_h / src_h), divisible_by)
-                    ref_tensor = _resize_image(single_ref, tgt_w, tgt_h, "stretch to fit", divisible_by)
-                else:
-                    ref_tensor = _resize_image(single_ref, src_w, src_h, "maintain aspect ratio", divisible_by)
-                
-                if img_compression > 0:
-                    ref_tensor = _compress_image(ref_tensor, img_compression)
-                    
-                guide_data["images"].append(ref_tensor)
-                
-                # Safely hide reference sheets at the very end of the video sequence
-                insert_point = (clean_latent_frames + i) * 8
-                guide_data["insert_frames"].append(insert_point)
-                guide_data["strengths"].append(float(reference_strength))
-                
-                # Record dimensions for empty latent generation from the FIRST reference image if none exist
-                if derived_w <= 0 or derived_h <= 0:
-                    derived_w = ref_tensor.shape[2]
-                    derived_h = ref_tensor.shape[1]
+        # Dual Mode execution branches
+        if reference_mode == "Licon MSR (Prefix)":
+            if vae is None:
+                raise ValueError("reference_mode is set to 'Licon MSR (Prefix)' but no VAE is connected to the 'vae' input pin of LTX Director! Please connect your LTX VAE to encode the reference slideshow.")
 
-        # --- Auto-generate LTXV latent ---
-        total_latents = clean_latent_frames + len(refs_to_process)
-        ltxv_length = ((total_latents - 1) * 8) + 1  # Map back to pixel frames for the empty latent logic
-
-        if optional_latent is None:
-            latent_w = max(32, (derived_w // 32) * 32)
-            latent_h = max(32, (derived_h // 32) * 32)
+            # Compile character reference images and first timeline background image
+            prepared_images = []
             
-            samples = torch.zeros(
-                [1, 128, total_latents, latent_h // 32, latent_w // 32],
-                device=comfy.model_management.intermediate_device(),
-            )
-            latent = {"samples": samples}
+            # Prepare characters
+            for char_img in char_images:
+                prepared = _resize_image(char_img, derived_w, derived_h, resize_method, divisible_by)
+                prepared_images.append(prepared)
+                
+            # Prepare background scene
+            bg_tensor = None
+            if img_segs:
+                bg_tensor = _load_image_tensor(img_segs[0])
+            if bg_tensor is None:
+                bg_tensor = torch.zeros((1, derived_h, derived_w, 3), dtype=torch.float32)
+                
+            prepared_bg = _resize_image(bg_tensor, derived_w, derived_h, resize_method, divisible_by)
+            prepared_images.append(prepared_bg)
+            
+            # Expand frames
+            base_count = msr_prefix_frames // len(prepared_images)
+            remainder = msr_prefix_frames % len(prepared_images)
+            
+            slideshow_tensors = []
+            for index, prepared_img in enumerate(prepared_images):
+                repeats = base_count + (1 if index < remainder else 0)
+                for _ in range(repeats):
+                    slideshow_tensors.append(prepared_img[0])
+                    
+            slideshow_video = torch.stack(slideshow_tensors)
+            
+            # VAE encode slideshow_video
+            log.info(f"[PromptRelay] Encoding {msr_prefix_frames} Licon-MSR slideshow frames...")
+            
+            # Fixed: directly capture the output Tensor returned from standard vae.encode
+            msr_latent_samples = vae.encode(slideshow_video)
+            
+            # Ensure msr_latent_samples is 5D [B, C, F, H, W] to match LTX Video standard
+            if msr_latent_samples.dim() == 4:
+                msr_latent_samples = msr_latent_samples.unsqueeze(2)
+                
+            prefix_latent_frames = msr_latent_samples.shape[2]
+            
+            if optional_latent is not None:
+                # Concatenate slideshow and optional_latent along temporal dimension (dim=2)
+                log.info("[PromptRelay] Prepending reference slideshow to incoming optional_latent...")
+                opt_samples = optional_latent["samples"]
+                if opt_samples.dim() == 4:
+                    opt_samples = opt_samples.unsqueeze(2)
+                
+                samples = torch.cat([msr_latent_samples.to(device=opt_samples.device, dtype=opt_samples.dtype), opt_samples], dim=2)
+                total_latents = samples.shape[2]
+            else:
+                total_latents = prefix_latent_frames + clean_latent_frames
+                # Initialize 5D samples
+                samples = torch.zeros(
+                    [1, 128, total_latents, derived_h // 32, derived_w // 32],
+                    device=comfy.model_management.intermediate_device(),
+                )
+                # Copy encoded slideshow to the beginning of our latent
+                samples[:, :, :prefix_latent_frames, :, :] = msr_latent_samples
+            
+            # Protect prefix frames using a 5D noise mask [B, 1, F, H, W] matching LTX Video standard
+            if optional_latent is not None and "noise_mask" in optional_latent and optional_latent["noise_mask"] is not None:
+                opt_mask = optional_latent["noise_mask"]
+                if opt_mask.dim() == 4:
+                    opt_mask = opt_mask.unsqueeze(1) # Convert 4D to 5D [B, 1, F, H, W]
+                
+                prefix_mask = torch.ones((1, 1, prefix_latent_frames, samples.shape[3], samples.shape[4]), dtype=torch.float32, device=samples.device)
+                mask = torch.cat([prefix_mask, opt_mask.to(device=samples.device, dtype=prefix_mask.dtype)], dim=2)
+            else:
+                mask = torch.zeros(
+                    (1, 1, total_latents, samples.shape[3], samples.shape[4]), 
+                    dtype=torch.float32, 
+                    device=samples.device
+                )
+                mask[:, :, :prefix_latent_frames, :, :] = 1.0
+            
+            latent = {"samples": samples, "noise_mask": mask}
             log.info(
-                "[PromptRelay] Auto-generated LTXV latent: %dx%d, %d pixel frames (%d latent frames, %d refs hidden)",
-                latent_w, latent_h, ltxv_length, total_latents, len(refs_to_process)
+                "[PromptRelay] Created Licon-MSR Latent Prefix: %dx%d, %d total latent frames (%d prefix, %d generated)",
+                derived_w, derived_h, total_latents, prefix_latent_frames, total_latents - prefix_latent_frames
             )
-        else:
-            latent = optional_latent
+        else: # Standard "Ghost Mask (End)"
+            total_latents = clean_latent_frames + len(char_images)
+            
+            if optional_latent is None:
+                samples = torch.zeros(
+                    [1, 128, total_latents, derived_h // 32, derived_w // 32],
+                    device=comfy.model_management.intermediate_device(),
+                )
+                latent = {"samples": samples}
+            else:
+                latent = optional_latent
+                
+            # Process references as guide_data appended to the end of the video
+            if char_images:
+                for i, single_ref in enumerate(char_images):
+                    ref_tensor = _resize_image(single_ref, derived_w, derived_h, resize_method, divisible_by)
+                    if img_compression > 0:
+                        ref_tensor = _compress_image(ref_tensor, img_compression)
+                    guide_data["images"].append(ref_tensor)
+                    insert_point = (clean_latent_frames + i) * 8
+                    guide_data["insert_frames"].append(insert_point)
+                    guide_data["strengths"].append(float(reference_strength))
 
-        # --- Preprocess Prompts with Character Tags ---
         processed_global, processed_local = _preprocess_prompts_with_characters(
-            global_prompt, local_prompts, char1_description, char2_description, char3_description
+            global_prompt, local_prompts, char1_val, char2_val, char3_val
         )
 
         patched, conditioning = _encode_relay(
             model, clip, latent, processed_global, processed_local, segment_lengths, epsilon,
         )
 
-        # --- Build Audio Output ---
+        ltxv_length = ((total_latents - 1) * 8) + 1 
         audio_out = _build_combined_audio(timeline_data, ltxv_length, float(frame_rate))
-
-        # --- Audio Latent Generation ---
         audio_latent = {}
         
         if audio_vae is not None:
             def get_empty_latent():
-                # Support both raw AudioVAE objects and ComfyUI VAE wrappers.
                 inner = getattr(audio_vae, "first_stage_model", audio_vae)
                 z_channels = audio_vae.latent_channels
                 audio_freq = inner.latent_frequency_bins
@@ -813,7 +932,8 @@ class LTXDirector(io.ComfyNode):
                         if latent_samples.numel() == 0:
                             raise ValueError("Encoded audio latent is empty (0 elements).")
                         
-                        mask = torch.full(
+                        # Fix variable shadowing: renamed audio mask tensor to prevent overwriting video mask
+                        audio_mask_tensor = torch.full(
                             (1, latent_samples.shape[-2], latent_samples.shape[-1]), 
                             0.0, 
                             dtype=torch.float32, 
@@ -823,9 +943,8 @@ class LTXDirector(io.ComfyNode):
                         audio_latent = {
                             "samples": latent_samples,
                             "type": "audio",
-                            "noise_mask": mask.reshape((-1, 1, mask.shape[-2], mask.shape[-1]))
+                            "noise_mask": audio_mask_tensor.reshape((-1, 1, audio_mask_tensor.shape[-2], audio_mask_tensor.shape[-1]))
                         }
-                        log.info("[PromptRelay] Generated custom audio latent with noise mask (value=0.0).")
                     else:
                         raise ValueError("No audio waveform to encode.")
                 except Exception as e:
@@ -834,12 +953,10 @@ class LTXDirector(io.ComfyNode):
             else:
                 try:
                     audio_latent = get_empty_latent()
-                    log.info("[PromptRelay] Auto-generated empty audio latent.")
                 except Exception as e:
                     log.error("[PromptRelay] Could not generate empty audio latent: %s", e)
                     raise e
 
-        # --- Save formatted Prompts logic ---
         if save_prompts_to_file:
             try:
                 formatted_text = _format_timeline_to_text(

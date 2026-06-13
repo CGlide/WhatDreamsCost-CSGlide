@@ -41,9 +41,9 @@ This node uses Ollama Locally : you will need to install it (very lightweight) a
 
 - In your Ollama model folder run this command to install qwen 3.5 2b q4 (1.9gb) "ollama run huihui_ai/qwen3.5-abliterated:2B"
 
-- The model won't eat memory while generating since there is an auto clear when you hit Run or after 5min.
+- The model won't eat memory while generating since there is an auto clear VRAM when you hit Run or after 5min.
 
-- You can still enter your descripton manually if you don't want to install it but it works very well!
+- You can still enter your description manually if you don't want to install it but it works very well!
 
 - Enjoy!
 

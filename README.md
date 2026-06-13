@@ -35,7 +35,7 @@ All of my nodes are created with the help of AI, so there may or may not be redu
 **❗❗IMPORTANT❗❗**
 
 
-This is a Modded LTX director node with some extra option to help you create videos with references sheets
+This is a Modded LTX director node with some extra options to help you create videos with references sheets
 
 This node uses Ollama Locally : you will need to install it (very lightweight) and 
 

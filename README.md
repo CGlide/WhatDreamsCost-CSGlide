@@ -34,7 +34,15 @@ All of my nodes are created with the help of AI, so there may or may not be redu
 
 **❗❗IMPORTANT❗❗**
 
+
 This is a Modded LTX director node with some extra option to help you create videos with references sheets
+
+This node uses Ollama Locally : you will need to install it (very lightweight) and 
+
+in your Ollama model folder run this command to install qwen 3.5 2b q4 (1.9gb) ollama run huihui_ai/qwen3.5-abliterated:2B
+The model won't eat memory while generating since there is an auto clear when you hit Run or after 5min.
+You can still enter your descripton manually if you don't want to install it but it works very well!
+Enjoy§
 
 <img width="596" height="668" alt="Capture d&#39;écran 2026-06-13 234036" src="https://github.com/user-attachments/assets/2dfe7992-a72a-4eda-a103-41b3a8f77714" />
 

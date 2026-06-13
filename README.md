@@ -28,13 +28,16 @@ All of my nodes are created with the help of AI, so there may or may not be redu
 ## ❓ How to install nodes
 
 - Navigate to your `/ComfyUI/custom_nodes/ folder`
-- Run `git clone https://github.com/WhatDreamscost/WhatDreamsCost-ComfyUI`
-- Or download through the ComfyUI Manager.
+- Delete your old "WhatDreamsCost-ComfyUI" Folder
+- Run `git clone -b main_cs https://github.com/CGlide/WhatDreamsCost-ComfyUI.git`
+
 
 **❗❗IMPORTANT❗❗**
 
-If you don't see the latest version (v1.3.5) yet in the manager then just downloaded the nightly version (or fetch the updates to update the list to see the latest version). 
-Also you will need to update ComfyUI-LTXVideo and ComfyUI-KJNodes to the latest version as well. You cannot use this node without updating ComfyUI-LTXVideo!
+This is a Modded LTX director node with some extra option to help you create videos with references sheets
+
+<img width="596" height="668" alt="Capture d&#39;écran 2026-06-13 234036" src="https://github.com/user-attachments/assets/2dfe7992-a72a-4eda-a103-41b3a8f77714" />
+
 
 # 🔄 Recent Updates
 

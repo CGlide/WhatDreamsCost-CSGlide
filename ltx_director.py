@@ -1,3 +1,5 @@
+# --- START OF FILE ltx_director.py ---
+
 import logging
 import json
 import base64
@@ -30,6 +32,14 @@ log = logging.getLogger(__name__)
 
 # Custom socket type shared with LTXSequencer
 GuideData = io.Custom("GUIDE_DATA")
+
+# --- Licon MSR engine fixed parameters (were node widgets; hardcoded for a clean UI) ---
+# Slideshow length. 41 is the Licon training default (valid: 17 / 25 / 33 / 41).
+MSR_PREFIX_FRAMES = 41
+# latent_downscale_factor for the IC-LoRA reference frames. Tied to how the MSR LoRA was
+# trained; Licon MSR V1 uses full-resolution references (1.0). This is INDEPENDENT of any
+# multi-stage scale_by / x2 upscaling, which LTXDirectorGuide handles downstream.
+MSR_LATENT_DOWNSCALE = 1.0
 
 
 def _preprocess_prompts_with_characters(global_prompt, local_prompts, char1="", char2="", char3=""):
@@ -160,135 +170,173 @@ def _format_timeline_to_text(global_prompt, duration_frames, frame_rate, epsilon
     return "\n".join(lines)
 
 
-# Register API endpoint for instant export from the JS UI if needed
-try:
-    import server
-    from aiohttp import web
+def _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames):
+    if not pixel_lengths:
+        return []
+    total_pixel = sum(pixel_lengths)
+    if total_pixel <= 0:
+        return [1] * len(pixel_lengths)
 
-    @server.PromptServer.instance.routes.post("/ltx_director/export_timeline")
-    async def export_timeline_endpoint(request):
-        try:
-            data = await request.json()
-            global_prompt = data.get("global_prompt", "")
-            timeline_data = data.get("timeline_data", "{}")
-            duration_frames = int(data.get("duration_frames", 0))
-            frame_rate = float(data.get("frame_rate", 24))
-            epsilon = float(data.get("epsilon", 0.001))
-            custom_width = int(data.get("custom_width", 0))
-            custom_height = int(data.get("custom_height", 0))
-            resize_method = data.get("resize_method", "maintain aspect ratio")
-            local_prompts = data.get("local_prompts", "")
-            segment_lengths = data.get("segment_lengths", "")
-            guide_strength = data.get("guide_strength", "")
-            
-            formatted_text = _format_timeline_to_text(
-                global_prompt, duration_frames, frame_rate, epsilon, 
-                custom_width, custom_height, resize_method,
-                timeline_data, local_prompts, segment_lengths, guide_strength
+    naive_total = max(1, round(total_pixel / temporal_stride))
+    target_total = min(latent_frames, naive_total)
+    if target_total >= latent_frames - 1:
+        target_total = latent_frames
+
+    exact = [p * target_total / total_pixel for p in pixel_lengths]
+    result = [int(e) for e in exact]
+    diff = target_total - sum(result)
+    if diff > 0:
+        order = sorted(range(len(exact)), key=lambda i: -(exact[i] - int(exact[i])))
+        for k in range(diff):
+            result[order[k % len(order)]] += 1
+
+    for i in range(len(result)):
+        if result[i] < 1:
+            max_idx = max(range(len(result)), key=lambda j: result[j])
+            if result[max_idx] > 1:
+                result[max_idx] -= 1
+                result[i] = 1
+
+    return result
+
+
+def _encode_relay(model, clip, latent, global_prompt, local_prompts, segment_lengths, epsilon):
+    for name, val in (("global_prompt", global_prompt),
+                      ("local_prompts", local_prompts),
+                      ("segment_lengths", segment_lengths)):
+        if val is None:
+            raise ValueError(
+                f"PromptRelay: '{name}' arrived as None. "
+                "Likely causes: a stale workflow JSON saved with null, the timeline "
+                "editor's web extension failing to load, or an upstream node returning None. "
+                "Set the field to an empty string or fix the upstream connection."
             )
-            
-            out_dir = folder_paths.get_output_directory()
-            filename = f"ltx_director_prompts_{int(time.time())}.txt"
-            filepath = os.path.join(out_dir, filename)
-            
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(formatted_text)
+
+    locals_list = [p.strip() for p in local_prompts.split("|")]
+    
+    for p in locals_list:
+        if not p:
+            raise ValueError("There is a segment on the timeline missing a prompt!")
+
+    if not locals_list or (len(locals_list) == 1 and not locals_list[0]):
+        raise ValueError("At least one local prompt is required.")
+
+    arch, patch_size, temporal_stride = detect_model_type(model)
+
+    samples = latent["samples"]
+    latent_frames = samples.shape[2]
+    tokens_per_frame = (samples.shape[3] // patch_size[1]) * (samples.shape[4] // patch_size[2])
+
+    parsed_lengths = None
+    if segment_lengths.strip():
+        pixel_lengths = [int(float(x.strip())) for x in segment_lengths.split(",") if x.strip()]
+        parsed_lengths = _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames)
+
+    raw_tokenizer = get_raw_tokenizer(clip)
+    full_prompt, token_ranges = map_token_indices(raw_tokenizer, global_prompt, locals_list)
+
+    log.info("[PromptRelay] Global: tokens [0:%d] (%d tokens)", token_ranges[0][0], token_ranges[0][0])
+    for i, (s, e) in enumerate(token_ranges):
+        log.info("[PromptRelay] Segment %d: tokens [%d:%d] (%d tokens)", i, s, e, e - s)
+
+    conditioning = clip.encode_from_tokens_scheduled(clip.tokenize(full_prompt))
+
+    effective_lengths = distribute_segment_lengths(len(locals_list), latent_frames, parsed_lengths)
+
+    log.info(
+        "[PromptRelay] Latent: %d frames, %d tokens/frame, segments: %s",
+        latent_frames, tokens_per_frame, effective_lengths,
+    )
+
+    q_token_idx = build_segments(token_ranges, effective_lengths, epsilon, None)
+    mask_fn = create_mask_fn(q_token_idx, tokens_per_frame, latent_frames)
+
+    patched = model.clone()
+    apply_patches(patched, arch, mask_fn)
+
+    return patched, conditioning
+
+
+def _execute_comfy_node(node_class, **kwargs):
+    """Executes any ComfyUI node class programmatically by resolving its entrypoint dynamically."""
+    if hasattr(node_class, "execute"):
+        return node_class.execute(**kwargs)
+        
+    node_instance = node_class()
+    func_name = getattr(node_class, "FUNCTION", None)
+    if func_name is None:
+        for candidate in ("generate", "encode", "process", "execute"):
+            if hasattr(node_instance, candidate):
+                func_name = candidate
+                break
                 
-            return web.json_response({
-                "status": "success", 
-                "filepath": filepath, 
-                "filename": filename, 
-                "content": formatted_text
-            })
-        except Exception as e:
-            log.error(f"[PromptRelay] Export timeline endpoint error: {e}")
-            return web.json_response({"status": "error", "message": str(e)}, status=500)
-except Exception as e:
-    log.warning(f"[PromptRelay] Could not register /ltx_director/export_timeline endpoint: {e}")
+    if func_name is not None:
+        func = getattr(node_instance, func_name)
+        import inspect
+        sig = inspect.signature(func)
+        filtered_kwargs = {}
+        for param in sig.parameters.values():
+            if param.name in kwargs:
+                filtered_kwargs[param.name] = kwargs[param.name]
+            elif param.default is not inspect.Parameter.empty:
+                pass
+            elif param.kind == inspect.Parameter.VAR_KEYWORD:
+                filtered_kwargs.update(kwargs)
+                break
+        return func(**filtered_kwargs)
+    else:
+        raise AttributeError(f"Could not resolve entrypoint for node class {node_class.__name__}")
 
 
-# Register API endpoint for instant character analysis via local Ollama
-try:
-    import server
-    from aiohttp import web
-    import aiohttp
+def _unpack(out):
+    """Safely extracts positional returns from ComfyUI API outputs."""
+    try:
+        return out[0], out[1], out[2]
+    except Exception:
+        t = tuple(out)
+        return t[0], t[1], t[2]
 
-    @server.PromptServer.instance.routes.post("/ltx_director/analyze_character")
-    async def analyze_character_endpoint(request):
+
+def _load_image_source(b64_or_url: str, filename: str = None) -> torch.Tensor:
+    if not b64_or_url and not filename:
+        return torch.zeros((1, 512, 512, 3), dtype=torch.float32)
+        
+    if b64_or_url and "view?" in b64_or_url:
         try:
-            data = await request.json()
-            image_b64 = data.get("image_b64", "")
-            char_index = int(data.get("char_index", 0))
-
-            if not image_b64:
-                return web.json_response({"status": "error", "message": "No image provided for analysis."})
-
-            b64_list = image_b64 if isinstance(image_b64, list) else [image_b64]
-            cleaned_b64_list = []
-            for b64 in b64_list:
-                if "," in b64:
-                    b64 = b64.split(",", 1)[1]
-                cleaned_b64_list.append(b64)
-
-            if not cleaned_b64_list:
-                return web.json_response({"status": "error", "message": "No valid base64 images decoded."})
-
-            # Configured to use huihui_ai/qwen3.5-abliterated:2b on Ollama
-            model_name = "huihui_ai/qwen3.5-abliterated:2b"
-            
-            # Detailed visual prompt for high-fidelity descriptions
-            prompt = (
-                "Describe the character's physical appearance in two concise sentences. "
-                "Specify their hair color/style, face details, and their clothing type/color. "
-                "Keep the entire response very brief."
-            )
-
-            log.info(f"[PromptRelay] Analyzing Character {char_index+1} with local Ollama model '{model_name}'...")
-
-            payload = {
-                "model": model_name,
-                "prompt": prompt,
-                "images": cleaned_b64_list,
-                "stream": False,
-                "keep_alive": 0  # Fixed: Immediately unloads the model from VRAM after generating the description
-            }
-
-            ollama_url = "http://127.0.0.1:11434/api/generate"
-            
-            # Send the request asynchronously to Ollama without blocking ComfyUI's main thread
-            async with aiohttp.ClientSession() as session:
-                try:
-                    async with session.post(ollama_url, json=payload, timeout=60) as response:
-                        if response.status != 200:
-                            err_txt = await response.text()
-                            return web.json_response({
-                                "status": "error", 
-                                "message": f"Ollama returned HTTP {response.status}: {err_txt}"
-                            })
-                        
-                        resp_json = await response.json()
-                        generated_text = resp_json.get("response", "").strip()
-                except aiohttp.ClientConnectorError:
-                    return web.json_response({
-                        "status": "error", 
-                        "message": (
-                            "Could not connect to Ollama. Please ensure Ollama is installed, "
-                            "running in the background, and that you have pulled the model "
-                            "via 'ollama run huihui_ai/qwen3.5-abliterated:2b' in your terminal."
-                        )
-                    })
-
-            if "<think>" in generated_text:
-                generated_text = generated_text.split("</think>")[-1].strip()
-
-            log.info(f"[PromptRelay] Analysis complete: {generated_text}")
-            return web.json_response({"status": "success", "description": generated_text})
-
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(b64_or_url)
+            q = parse_qs(parsed.query)
+            fname = q.get("filename", [None])[0]
+            subfolder = q.get("subfolder", [""])[0]
+            if fname:
+                file_path = os.path.join(folder_paths.get_input_directory(), subfolder, fname)
+                if os.path.exists(file_path):
+                    img = Image.open(file_path).convert("RGB")
+                    arr = np.array(img, dtype=np.float32) / 255.0
+                    return torch.from_numpy(arr).unsqueeze(0)
         except Exception as e:
-            log.error(f"[PromptRelay] Failed to analyze character: {e}")
-            return web.json_response({"status": "error", "message": str(e)}, status=500)
-except Exception as e:
-    log.warning(f"[PromptRelay] Could not register /ltx_director/analyze_character endpoint: {e}")
+            log.debug(f"[PromptRelay] URL parsing failed for {b64_or_url}: {e}")
+
+    if filename:
+        file_path = os.path.join(folder_paths.get_input_directory(), filename)
+        if os.path.exists(file_path):
+            img = Image.open(file_path).convert("RGB")
+            arr = np.array(img, dtype=np.float32) / 255.0
+            return torch.from_numpy(arr).unsqueeze(0)
+
+    if b64_or_url:
+        try:
+            b64_str = b64_or_url
+            if "," in b64_str:
+                b64_str = b64_str.split(",", 1)[1]
+            img_bytes = base64.b64decode(b64_str)
+            img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
+            arr = np.array(img, dtype=np.float32) / 255.0
+            return torch.from_numpy(arr).unsqueeze(0)
+        except Exception as e:
+            log.debug(f"[PromptRelay] Base64 decoding failed: {e}")
+            
+    return torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
 
 def _load_image_tensor(seg: dict) -> torch.Tensor:
@@ -300,6 +348,23 @@ def _load_image_tensor(seg: dict) -> torch.Tensor:
             return torch.from_numpy(arr).unsqueeze(0)
 
     b64_str = seg.get("imageB64", "")
+    
+    if b64_str and "view?" in b64_str:
+        try:
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(b64_str)
+            q = parse_qs(parsed.query)
+            fname = q.get("filename", [None])[0]
+            subfolder = q.get("subfolder", [""])[0]
+            if fname:
+                file_path = os.path.join(folder_paths.get_input_directory(), subfolder, fname)
+                if os.path.exists(file_path):
+                    img = Image.open(file_path).convert("RGB")
+                    arr = np.array(img, dtype=np.float32) / 255.0
+                    return torch.from_numpy(arr).unsqueeze(0)
+        except Exception as e:
+            log.debug(f"[PromptRelay] URL parsing failed for {b64_str}: {e}")
+
     if not b64_str or b64_str.startswith("/view?"):
         return torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
@@ -317,7 +382,6 @@ def _load_image_tensor(seg: dict) -> torch.Tensor:
 
 def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: str, divisible_by: int) -> torch.Tensor:
     from PIL import Image as _PilImage
-    import torchvision.transforms.functional as TF
 
     def snap(val, div):
         return max(div, (val // div) * div)
@@ -447,21 +511,14 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
             
             with av.open(buffer) as container:
                 stream = container.streams.audio[0]
-                
-                resampler = av.AudioResampler(
-                    format='fltp',
-                    layout='stereo',
-                    rate=target_sr,
-                )
+                resampler = av.AudioResampler(format='fltp', layout='stereo', rate=target_sr)
                 
                 for frame in container.decode(stream):
                     for resampled_frame in resampler.resample(frame):
-                        arr = resampled_frame.to_ndarray()
-                        clip_frames.append(torch.from_numpy(arr))
+                        clip_frames.append(torch.from_numpy(resampled_frame.to_ndarray()))
                 
                 for resampled_frame in resampler.resample(None):
-                    arr = resampled_frame.to_ndarray()
-                    clip_frames.append(torch.from_numpy(arr))
+                    clip_frames.append(torch.from_numpy(resampled_frame.to_ndarray()))
 
             if not clip_frames:
                 continue
@@ -509,91 +566,129 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
     return {"waveform": out_waveform.unsqueeze(0), "sample_rate": target_sr}
 
 
-def _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames):
-    if not pixel_lengths:
-        return []
-    total_pixel = sum(pixel_lengths)
-    if total_pixel <= 0:
-        return [1] * len(pixel_lengths)
+# Register API endpoint for instant export
+try:
+    import server
+    from aiohttp import web
 
-    naive_total = max(1, round(total_pixel / temporal_stride))
-    target_total = min(latent_frames, naive_total)
-    if target_total >= latent_frames - 1:
-        target_total = latent_frames
+    @server.PromptServer.instance.routes.post("/ltx_director/export_timeline")
+    async def export_timeline_endpoint(request):
+        try:
+            data = await request.json()
+            global_prompt = data.get("global_prompt", "")
+            timeline_data = data.get("timeline_data", "{}")
+            duration_frames = int(data.get("duration_frames", 0))
+            frame_rate = float(data.get("frame_rate", 24))
+            epsilon = float(data.get("epsilon", 0.001))
+            custom_width = int(data.get("custom_width", 0))
+            custom_height = int(data.get("custom_height", 0))
+            resize_method = data.get("resize_method", "maintain aspect ratio")
+            local_prompts = data.get("local_prompts", "")
+            segment_lengths = data.get("segment_lengths", "")
+            guide_strength = data.get("guide_strength", "")
+            
+            formatted_text = _format_timeline_to_text(
+                global_prompt, duration_frames, frame_rate, epsilon, 
+                custom_width, custom_height, resize_method,
+                timeline_data, local_prompts, segment_lengths, guide_strength
+            )
+            
+            out_dir = folder_paths.get_output_directory()
+            filename = f"ltx_director_prompts_{int(time.time())}.txt"
+            filepath = os.path.join(out_dir, filename)
+            
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(formatted_text)
+                
+            return web.json_response({
+                "status": "success", 
+                "filepath": filepath, 
+                "filename": filename, 
+                "content": formatted_text
+            })
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+except Exception as e:
+    pass
 
-    exact = [p * target_total / total_pixel for p in pixel_lengths]
-    result = [int(e) for e in exact]
-    diff = target_total - sum(result)
-    if diff > 0:
-        order = sorted(range(len(exact)), key=lambda i: -(exact[i] - int(exact[i])))
-        for k in range(diff):
-            result[order[k % len(order)]] += 1
+# Register API endpoint for instant character analysis via local Ollama
+try:
+    import server
+    from aiohttp import web
+    import aiohttp
 
-    for i in range(len(result)):
-        if result[i] < 1:
-            max_idx = max(range(len(result)), key=lambda j: result[j])
-            if result[max_idx] > 1:
-                result[max_idx] -= 1
-                result[i] = 1
+    @server.PromptServer.instance.routes.post("/ltx_director/analyze_character")
+    async def analyze_character_endpoint(request):
+        try:
+            data = await request.json()
+            image_b64 = data.get("image_b64", "")
+            char_index = int(data.get("char_index", 0))
 
-    return result
+            if not image_b64:
+                return web.json_response({"status": "error", "message": "No image provided for analysis."})
 
+            b64_list = image_b64 if isinstance(image_b64, list) else [image_b64]
+            cleaned_b64_list = []
+            for b64 in b64_list:
+                if "," in b64:
+                    b64 = b64.split(",", 1)[1]
+                cleaned_b64_list.append(b64)
 
-def _encode_relay(model, clip, latent, global_prompt, local_prompts, segment_lengths, epsilon):
-    for name, val in (("global_prompt", global_prompt),
-                      ("local_prompts", local_prompts),
-                      ("segment_lengths", segment_lengths)):
-        if val is None:
-            raise ValueError(
-                f"PromptRelay: '{name}' arrived as None. "
-                "Likely causes: a stale workflow JSON saved with null, the timeline "
-                "editor's web extension failing to load, or an upstream node returning None. "
-                "Set the field to an empty string or fix the upstream connection."
+            if not cleaned_b64_list:
+                return web.json_response({"status": "error", "message": "No valid base64 images decoded."})
+
+            # Restored your preferred model configuration
+            model_name = "huihui_ai/qwen3.5-abliterated:2b"
+            prompt = (
+                "Describe the character's physical appearance in two concise sentences. "
+                "Specify their hair color/style, face details, and their clothing type/color. "
+                "Keep the entire response very brief."
             )
 
-    locals_list = [p.strip() for p in local_prompts.split("|")]
-    
-    for p in locals_list:
-        if not p:
-            raise ValueError("There is a segment on the timeline missing a prompt!")
+            log.info(f"[PromptRelay] Analyzing Character {char_index+1} with local Ollama model '{model_name}'...")
 
-    if not locals_list or (len(locals_list) == 1 and not locals_list[0]):
-        raise ValueError("At least one local prompt is required.")
+            payload = {
+                "model": model_name,
+                "prompt": prompt,
+                "images": cleaned_b64_list,
+                "stream": False,
+                "keep_alive": 0
+            }
 
-    arch, patch_size, temporal_stride = detect_model_type(model)
+            ollama_url = "http://127.0.0.1:11434/api/generate"
+            
+            async with aiohttp.ClientSession() as session:
+                try:
+                    async with session.post(ollama_url, json=payload, timeout=60) as response:
+                        if response.status != 200:
+                            err_txt = await response.text()
+                            return web.json_response({
+                                "status": "error", 
+                                "message": f"Ollama returned HTTP {response.status}: {err_txt}"
+                            })
+                        
+                        resp_json = await response.json()
+                        generated_text = resp_json.get("response", "").strip()
+                except aiohttp.ClientConnectorError:
+                    return web.json_response({
+                        "status": "error", 
+                        "message": (
+                            f"Could not connect to Ollama. Please ensure Ollama is installed and "
+                            f"running, and that you have pulled the model via 'ollama run {model_name}'."
+                        )
+                    })
 
-    samples = latent["samples"]
-    latent_frames = samples.shape[2]
-    tokens_per_frame = (samples.shape[3] // patch_size[1]) * (samples.shape[4] // patch_size[2])
+            if "<think>" in generated_text:
+                generated_text = generated_text.split("</think>")[-1].strip()
 
-    parsed_lengths = None
-    if segment_lengths.strip():
-        pixel_lengths = [int(float(x.strip())) for x in segment_lengths.split(",") if x.strip()]
-        parsed_lengths = _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames)
+            log.info(f"[PromptRelay] Analysis complete: {generated_text}")
+            return web.json_response({"status": "success", "description": generated_text})
 
-    raw_tokenizer = get_raw_tokenizer(clip)
-    full_prompt, token_ranges = map_token_indices(raw_tokenizer, global_prompt, locals_list)
-
-    log.info("[PromptRelay] Global: tokens [0:%d] (%d tokens)", token_ranges[0][0], token_ranges[0][0])
-    for i, (s, e) in enumerate(token_ranges):
-        log.info("[PromptRelay] Segment %d: tokens [%d:%d] (%d tokens)", i, s, e, e - s)
-
-    conditioning = clip.encode_from_tokens_scheduled(clip.tokenize(full_prompt))
-
-    effective_lengths = distribute_segment_lengths(len(locals_list), latent_frames, parsed_lengths)
-
-    log.info(
-        "[PromptRelay] Latent: %d frames, %d tokens/frame, segments: %s",
-        latent_frames, tokens_per_frame, effective_lengths,
-    )
-
-    q_token_idx = build_segments(token_ranges, effective_lengths, epsilon, None)
-    mask_fn = create_mask_fn(q_token_idx, tokens_per_frame, latent_frames)
-
-    patched = model.clone()
-    apply_patches(patched, arch, mask_fn)
-
-    return patched, conditioning
+        except Exception as e:
+            log.error(f"[PromptRelay] Failed to analyze character: {e}")
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+except Exception as e:
+    pass
 
 
 class LTXDirector(io.ComfyNode):
@@ -613,6 +708,7 @@ class LTXDirector(io.ComfyNode):
             inputs=[
                 io.Model.Input("model"),
                 io.Clip.Input("clip"),
+                io.Conditioning.Input("negative", optional=True, tooltip="Optional. Connect your negative prompt conditioning here. Highly recommended for Licon MSR to prevent noise artifacts."),
                 io.Vae.Input("vae", optional=True, tooltip="Optional. Connect the LTX Autoencoder/VAE here to natively encode the MSR visual reference slideshow into the latent prefix."),
                 io.Vae.Input("audio_vae", optional=True, tooltip="Optional. Connect an Audio VAE to generate audio latents."),
                 io.Latent.Input("optional_latent", optional=True, tooltip="Optional. Connect a latent to override the auto-generated one."),
@@ -632,14 +728,14 @@ class LTXDirector(io.ComfyNode):
                 io.Combo.Input("resize_method", options=["maintain aspect ratio", "stretch to fit", "pad", "crop"], default="maintain aspect ratio", tooltip="How to resize image segments to fit the target dimensions."),
                 io.Int.Input("divisible_by", default=32, min=1, max=256, step=1, tooltip="Snap the final output image dimensions to be divisible by this number (e.g. 32 for LTX)."),
                 io.Int.Input("img_compression", default=18, min=0, max=100, step=1, tooltip="H.264 CRF compression to apply to each guide image. 0 = no compression, higher = more artefacts."),
+                io.Combo.Input("reference_mode", options=["Ghost Mask (End)", "Licon MSR (Prefix)"], default="Ghost Mask (End)", tooltip="Choose whether to hide the references at the end with attention masks (Ghost Mask) or stack them sequentially at the beginning (Licon MSR Prefix) for the MSR LoRA."),
                 io.Boolean.Input("save_prompts_to_file", default=False, optional=True, tooltip="Save the timeline prompts and parameters to a text file in your ComfyUI output directory during execution."),
                 io.Float.Input("reference_strength", default=1.0, min=0.0, max=5.0, step=0.05, optional=True, tooltip="Guide strength for the reference images."),
-                io.Combo.Input("reference_mode", options=["Ghost Mask (End)", "Licon MSR (Prefix)"], default="Ghost Mask (End)", tooltip="Choose whether to hide the references at the end with attention masks (Ghost Mask) or stack them sequentially at the beginning (Licon MSR Prefix) for the MSR LoRA."),
-                io.Int.Input("msr_prefix_frames", default=17, min=1, max=120, step=1, tooltip="The number of visual slideshow frames to generate at the start of the sequence for MSR LoRA (typically 17, 25, 33, or 41)."),
             ],
             outputs=[
                 io.Model.Output(display_name="model"),
                 io.Conditioning.Output(display_name="positive"),
+                io.Conditioning.Output(display_name="negative"),
                 io.Latent.Output(display_name="video_latent"),
                 io.Latent.Output(display_name="audio_latent"),
                 GuideData.Output(display_name="guide_data"),
@@ -651,43 +747,33 @@ class LTXDirector(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, model, clip, global_prompt, duration_frames, duration_seconds,
-                timeline_data, local_prompts, segment_lengths, guide_strength="", epsilon=1e-3,
-                frame_rate=24.0, display_mode="seconds",
-                custom_width=768, custom_height=512, resize_method="maintain aspect ratio",
-                divisible_by=32, img_compression=0, vae=None, audio_vae=None, optional_latent=None,
-                use_custom_audio=False, save_prompts_to_file=False,
-                reference_strength=1.0, reference_mode="Ghost Mask (End)", msr_prefix_frames=17) -> io.NodeOutput:
+    def execute(cls, model, clip, negative=None, vae=None, audio_vae=None, optional_latent=None,
+                global_prompt="", duration_frames=120, duration_seconds=5.0,
+                timeline_data="", use_custom_audio=False, local_prompts="", segment_lengths="",
+                epsilon=1e-3, frame_rate=24.0, display_mode="seconds", guide_strength="",
+                custom_width=0, custom_height=0, resize_method="maintain aspect ratio",
+                divisible_by=32, img_compression=18,
+                reference_mode="Ghost Mask (End)",
+                save_prompts_to_file=False, reference_strength=1.0) -> io.NodeOutput:
 
-        # Force Ollama to unload the vision model to maximize VRAM before generation begins
-        try:
-            import requests
-            unload_url = "http://127.0.0.1:11434/api/generate"
-            unload_payload = {
-                "model": "huihui_ai/qwen3.5-abliterated:2b",
-                "keep_alive": 0
-            }
-            requests.post(unload_url, json=unload_payload, timeout=2.0)
-            log.info("[PromptRelay] Dispatched VRAM eviction request to Ollama to maximize memory for LTX generation.")
-        except Exception as e:
-            log.debug("[PromptRelay] Ollama VRAM eviction skipped: %s", e)
+        if isinstance(optional_latent, list):
+            if len(optional_latent) > 0:
+                optional_latent = optional_latent[0]
+            else:
+                optional_latent = None
 
         clean_pixel_frames = duration_frames + 1
         clean_latent_frames = ((clean_pixel_frames - 1) // 8) + 1
 
         guide_data = {"images": [], "insert_frames": [], "strengths": [], "frame_rate": float(frame_rate)}
         derived_w, derived_h = custom_width, custom_height
-        
         char_images = []
+        char_slot_images = []  # per-slot tensors, for MSR @char tag filtering
                     
-        # Extract Timeline Character Descriptions (Fallback) and process dropped style images
-        char1_val = ""
-        char2_val = ""
-        char3_val = ""
+        char1_val, char2_val, char3_val = "", "", ""
         try:
             tdata = json.loads(timeline_data) if timeline_data else {}
             characters = tdata.get("characters", [])
-            
             if len(characters) > 0: char1_val = characters[0].get("description", "")
             if len(characters) > 1: char2_val = characters[1].get("description", "")
             if len(characters) > 2: char3_val = characters[2].get("description", "")
@@ -698,17 +784,14 @@ class LTXDirector(io.ComfyNode):
                 if legacy_b64 and not images_list:
                     images_list = [{"b64": legacy_b64, "name": char_info.get("fileName", "")}]
                     
+                slot_tensors = []
                 for img_info in images_list:
                     image_b64 = img_info.get("b64", "")
-                    if image_b64:
-                        if "," in image_b64:
-                            image_b64 = image_b64.split(",", 1)[1]
-                        img_bytes = base64.b64decode(image_b64)
-                        img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
-                        
-                        arr = np.array(img, dtype=np.float32) / 255.0
-                        tensor = torch.from_numpy(arr).unsqueeze(0)
-                        char_images.append(tensor)
+                    file_name = img_info.get("name", "")
+                    tensor = _load_image_source(image_b64, file_name)
+                    char_images.append(tensor)
+                    slot_tensors.append(tensor)
+                char_slot_images.append(slot_tensors)  # keep slot boundaries for @char filtering
         except Exception as e:
             log.warning("[PromptRelay] Could not process character slot inputs: %s", e)
                     
@@ -721,10 +804,7 @@ class LTXDirector(io.ComfyNode):
                 and int(s.get("start", 0)) < duration_frames
             ]
             img_segs.sort(key=lambda s: s["start"])
-
-            strengths = []
-            if guide_strength.strip():
-                strengths = [float(x.strip()) for x in guide_strength.split(",") if x.strip()]
+            strengths = [float(x.strip()) for x in guide_strength.split(",") if x.strip()] if guide_strength.strip() else []
 
             for idx, seg in enumerate(img_segs):
                 tensor = _load_image_tensor(seg)
@@ -758,6 +838,7 @@ class LTXDirector(io.ComfyNode):
                 guide_data["insert_frames"].append(int(seg["start"]))
                 guide_data["strengths"].append(float(strength))
             
+            # Prevent crashes if completely empty
             if not guide_data["images"] and not char_images:
                 w = derived_w if derived_w > 0 else 768
                 h = derived_h if derived_h > 0 else 512
@@ -774,110 +855,154 @@ class LTXDirector(io.ComfyNode):
         except Exception as e:
             log.warning("[PromptRelay] Could not build guide_data: %s", e)
 
-        # Initialize dimension checks
         derived_w = max(32, (derived_w // 32) * 32) if derived_w > 0 else 768
         derived_h = max(32, (derived_h // 32) * 32) if derived_h > 0 else 512
 
-        # Dual Mode execution branches
+        if reference_mode == "Licon MSR (Prefix)":
+            processed_global, processed_local = global_prompt, local_prompts
+        else:
+            processed_global, processed_local = _preprocess_prompts_with_characters(
+                global_prompt, local_prompts, char1_val, char2_val, char3_val
+            )
+
+        # ====== LICON MSR DIRECTOR ENGINE (relay-aware) ======
+        # Axis separation, so the relay and IC-LoRA never fight over the same bookkeeping:
+        #   - Character slots  -> IDENTITY. Built into the IC-LoRA slideshow AND pinned as
+        #                          one identity keyframe each (the MSR LoRA's job).
+        #   - Timeline images  -> SCENE/background. The first seeds the slideshow's background
+        #                          slot; every timeline image is also pinned at its own
+        #                          frame_idx as a positional scene reference.
+        #   - Timeline text    -> the relay's per-segment attention mask over the clean region.
+        # The relay conditioning is encoded FIRST, then threaded THROUGH the IC-LoRA guide
+        # calls, so keyframe metadata + guide_attention_entries land on the real conditioning
+        # natively. The Director bakes everything it conditions on, so the relay mask length
+        # stays self-consistent with the latent and nothing downstream needs to add frames.
         if reference_mode == "Licon MSR (Prefix)":
             if vae is None:
-                raise ValueError("reference_mode is set to 'Licon MSR (Prefix)' but no VAE is connected to the 'vae' input pin of LTX Director! Please connect your LTX VAE to encode the reference slideshow.")
+                raise ValueError("Licon MSR (Prefix) mode requires connecting the VAE to LTX Director!")
 
-            # Compile character reference images and first timeline background image
-            prepared_images = []
-            
-            # Prepare characters
-            for char_img in char_images:
-                prepared = _resize_image(char_img, derived_w, derived_h, resize_method, divisible_by)
-                prepared_images.append(prepared)
-                
-            # Prepare background scene
-            bg_tensor = None
-            if img_segs:
-                bg_tensor = _load_image_tensor(img_segs[0])
-            if bg_tensor is None:
-                bg_tensor = torch.zeros((1, derived_h, derived_w, 3), dtype=torch.float32)
-                
-            prepared_bg = _resize_image(bg_tensor, derived_w, derived_h, resize_method, divisible_by)
-            prepared_images.append(prepared_bg)
-            
-            # Expand frames
-            base_count = msr_prefix_frames // len(prepared_images)
-            remainder = msr_prefix_frames % len(prepared_images)
-            
+            from nodes import NODE_CLASS_MAPPINGS
+            IC_Lora_Guide_Class = NODE_CLASS_MAPPINGS.get("LTXAddVideoICLoRAGuide")
+            if IC_Lora_Guide_Class is None:
+                raise ValueError("LTXAddVideoICLoRAGuide node not found! Please install the ComfyUI-LTXVideo repository.")
+
+            # 1. Identity references. In MSR the reference IMAGE drives identity, so we
+            #    honour the @charN tags by selecting ONLY the slots the prompt references.
+            #    @char1/@character1 -> slot 0, @char2 -> slot 1, @char3 -> slot 2.
+            #    No tag referenced (or referenced slots empty) -> use every filled slot.
+            _prompt_text = (global_prompt or "") + " " + (local_prompts or "")
+            _tag_pairs = [("@character1", "@char1"), ("@character2", "@char2"), ("@character3", "@char3")]
+            _referenced_slots = [i for i, tags in enumerate(_tag_pairs) if any(t in _prompt_text for t in tags)]
+            _selected = []
+            for _slot in _referenced_slots:
+                if _slot < len(char_slot_images):
+                    _selected.extend(char_slot_images[_slot])
+            if not _selected:
+                _selected = char_images  # fallback: no tags, or tagged slots had no image
+            log.info("[PromptRelay] MSR slideshow subjects: referenced slots=%s, images=%d", _referenced_slots, len(_selected))
+            identity_images = [
+                _resize_image(c, derived_w, derived_h, resize_method, divisible_by)
+                for c in _selected
+            ]
+
+            # 2. Scene references: every timeline image (already loaded/resized into guide_data
+            #    upstream). Snapshot them, then clear guide_data so the downstream LTXDirectorGuide
+            #    is a no-op -- the Director bakes them itself for a self-consistent latent length.
+            scene_images = list(guide_data["images"])
+            scene_frames = list(guide_data["insert_frames"])
+            scene_strengths = list(guide_data["strengths"])
+            guide_data = {"images": [], "insert_frames": [], "strengths": [], "frame_rate": float(frame_rate)}
+
+            # 3. Slideshow background slide = first timeline image, else black.
+            if scene_images:
+                bg_slide = scene_images[0]
+                if bg_slide.shape[1] != derived_h or bg_slide.shape[2] != derived_w:
+                    bg_slide = _resize_image(bg_slide, derived_w, derived_h, resize_method, divisible_by)
+            else:
+                bg_slide = torch.zeros((1, derived_h, derived_w, 3), dtype=torch.float32)
+
+            # 4. Build the slideshow exactly like Licon MSR: characters then background,
+            #    distributed across MSR_PREFIX_FRAMES.
+            slideshow_sources = identity_images + [bg_slide]
+            base_count = MSR_PREFIX_FRAMES // len(slideshow_sources)
+            remainder = MSR_PREFIX_FRAMES % len(slideshow_sources)
             slideshow_tensors = []
-            for index, prepared_img in enumerate(prepared_images):
+            for index, src_img in enumerate(slideshow_sources):
                 repeats = base_count + (1 if index < remainder else 0)
-                for _ in range(repeats):
-                    slideshow_tensors.append(prepared_img[0])
-                    
+                slideshow_tensors.extend([src_img[0]] * repeats)
             slideshow_video = torch.stack(slideshow_tensors)
-            
-            # VAE encode slideshow_video
-            log.info(f"[PromptRelay] Encoding {msr_prefix_frames} Licon-MSR slideshow frames...")
-            
-            # Fixed: directly capture the output Tensor returned from standard vae.encode
-            msr_latent_samples = vae.encode(slideshow_video)
-            
-            # Ensure msr_latent_samples is 5D [B, C, F, H, W] to match LTX Video standard
-            if msr_latent_samples.dim() == 4:
-                msr_latent_samples = msr_latent_samples.unsqueeze(2)
-                
-            prefix_latent_frames = msr_latent_samples.shape[2]
-            
-            if optional_latent is not None:
-                # Concatenate slideshow and optional_latent along temporal dimension (dim=2)
-                log.info("[PromptRelay] Prepending reference slideshow to incoming optional_latent...")
-                opt_samples = optional_latent["samples"]
-                if opt_samples.dim() == 4:
-                    opt_samples = opt_samples.unsqueeze(2)
-                
-                samples = torch.cat([msr_latent_samples.to(device=opt_samples.device, dtype=opt_samples.dtype), opt_samples], dim=2)
-                total_latents = samples.shape[2]
+
+            # 5. PER-STAGE reference handoff. In two-stage pipelines the references must be
+            #    (re)encoded at EACH stage's resolution; a footprint baked here at full res breaks
+            #    when scale_by shrinks the latent downstream. So the Director no longer injects --
+            #    it hands the raw full-res slideshow + keyframe images to LTXDirectorGuide, which
+            #    encodes and injects them at its own resolution. The length budget is purely
+            #    TEMPORAL (scale-invariant): LTXVCropGuides always trims the slideshow's temporal
+            #    footprint (prefix_latents), so the guide node pads the generated region so that
+            #    (pad + keyframes) == prefix_latents at whatever resolution it runs.
+            keyframe_images = slideshow_sources          # chars + bg (same set as the slideshow)
+            num_keyframes = len(keyframe_images)
+            prefix_latents = ((MSR_PREFIX_FRAMES - 1) // 8) + 1
+            tail_latents = prefix_latents                 # pad + keyframes, filled in per stage
+            total_runtime_latents = clean_latent_frames + tail_latents
+            tail_pixels = tail_latents * 8
+
+            # 6. Relay conditioning over the runtime length. This is temporal, so the mask is
+            #    valid at every stage regardless of scale_by: clean -> locals, tail -> global.
+            local_part = processed_local.strip() if processed_local.strip() else processed_global
+            clean_lengths = segment_lengths.strip() if segment_lengths.strip() else str(duration_frames)
+            injected_local = f"{local_part} | {processed_global}"
+            injected_lengths = f"{clean_lengths},{tail_pixels}"
+
+            dummy_full = {"samples": torch.zeros(
+                [1, 128, total_runtime_latents, derived_h // 32, derived_w // 32],
+                device=comfy.model_management.intermediate_device(),
+            )}
+
+            # FALLBACK (relay vs LoRA attention conflict): replace the next call with
+            #     patched = model.clone()
+            #     conditioning = clip.encode_from_tokens_scheduled(clip.tokenize(processed_global))
+            patched, conditioning = _encode_relay(
+                model, clip, dummy_full, processed_global, injected_local, injected_lengths, epsilon
+            )
+
+            if negative is None:
+                neg_tokens = clip.tokenize("worst quality, blurry, low resolution, jittery, low geometry, bad details")
+                conditioning_neg = clip.encode_from_tokens_scheduled(neg_tokens)
             else:
-                total_latents = prefix_latent_frames + clean_latent_frames
-                # Initialize 5D samples
-                samples = torch.zeros(
-                    [1, 128, total_latents, derived_h // 32, derived_w // 32],
-                    device=comfy.model_management.intermediate_device(),
-                )
-                # Copy encoded slideshow to the beginning of our latent
-                samples[:, :, :prefix_latent_frames, :, :] = msr_latent_samples
-            
-            # Protect prefix frames using a 5D noise mask [B, 1, F, H, W] matching LTX Video standard
-            if optional_latent is not None and "noise_mask" in optional_latent and optional_latent["noise_mask"] is not None:
-                opt_mask = optional_latent["noise_mask"]
-                if opt_mask.dim() == 4:
-                    opt_mask = opt_mask.unsqueeze(1) # Convert 4D to 5D [B, 1, F, H, W]
-                
-                prefix_mask = torch.ones((1, 1, prefix_latent_frames, samples.shape[3], samples.shape[4]), dtype=torch.float32, device=samples.device)
-                mask = torch.cat([prefix_mask, opt_mask.to(device=samples.device, dtype=prefix_mask.dtype)], dim=2)
-            else:
-                mask = torch.zeros(
-                    (1, 1, total_latents, samples.shape[3], samples.shape[4]), 
-                    dtype=torch.float32, 
-                    device=samples.device
-                )
-                mask[:, :, :prefix_latent_frames, :, :] = 1.0
-            
-            latent = {"samples": samples, "noise_mask": mask}
+                conditioning_neg = negative
+
+            # 7. Clean base latent: the TRUE clean region only (C frames), at full target res.
+            #    LTXDirectorGuide scales it per stage, pads it, and appends the keyframes.
+            latent = {
+                "samples": torch.zeros([1, 128, clean_latent_frames, derived_h // 32, derived_w // 32], device=comfy.model_management.intermediate_device()),
+                "noise_mask": torch.ones((1, 1, clean_latent_frames, derived_h // 32, derived_w // 32), dtype=torch.float32, device=comfy.model_management.intermediate_device()),
+            }
+
+            # 8. Hand the RAW full-res references to the guide node via guide_data (no new socket).
+            #    Each stage VAE-encodes them at its own scale, so Stage 2 sees full-res detail.
+            guide_data = {
+                "images": [], "insert_frames": [], "strengths": [], "frame_rate": float(frame_rate),
+                "msr": {
+                    "slideshow": slideshow_video,        # [F, H, W, 3] full-res montage
+                    "keyframes": keyframe_images,         # list of [1, H, W, 3] full-res refs
+                    "prefix_latents": int(prefix_latents),
+                    "strength": float(reference_strength),
+                    "downscale": float(MSR_LATENT_DOWNSCALE),
+                    "clean_latent_frames": int(clean_latent_frames),
+                },
+            }
+
+            total_latents = total_runtime_latents         # clean + prefix (what the sampler sees)
+
             log.info(
-                "[PromptRelay] Created Licon-MSR Latent Prefix: %dx%d, %d total latent frames (%d prefix, %d generated)",
-                derived_w, derived_h, total_latents, prefix_latent_frames, total_latents - prefix_latent_frames
+                "[PromptRelay] Licon MSR Engine (per-stage): clean=%d, tail=%d (prefix), "
+                "%d keyframes handed to LTXDirectorGuide for per-resolution injection.",
+                clean_latent_frames, tail_latents, num_keyframes,
             )
         else: # Standard "Ghost Mask (End)"
             total_latents = clean_latent_frames + len(char_images)
             
-            if optional_latent is None:
-                samples = torch.zeros(
-                    [1, 128, total_latents, derived_h // 32, derived_w // 32],
-                    device=comfy.model_management.intermediate_device(),
-                )
-                latent = {"samples": samples}
-            else:
-                latent = optional_latent
-                
-            # Process references as guide_data appended to the end of the video
             if char_images:
                 for i, single_ref in enumerate(char_images):
                     ref_tensor = _resize_image(single_ref, derived_w, derived_h, resize_method, divisible_by)
@@ -888,13 +1013,25 @@ class LTXDirector(io.ComfyNode):
                     guide_data["insert_frames"].append(insert_point)
                     guide_data["strengths"].append(float(reference_strength))
 
-        processed_global, processed_local = _preprocess_prompts_with_characters(
-            global_prompt, local_prompts, char1_val, char2_val, char3_val
-        )
+            dummy_latent = {"samples": torch.zeros([1, 128, total_latents, derived_h // 32, derived_w // 32], device=comfy.model_management.intermediate_device())}
 
-        patched, conditioning = _encode_relay(
-            model, clip, latent, processed_global, processed_local, segment_lengths, epsilon,
-        )
+            patched, conditioning = _encode_relay(
+                model, clip, dummy_latent, processed_global, processed_local, segment_lengths, epsilon,
+            )
+            
+            if optional_latent is None:
+                latent = {
+                    "samples": torch.zeros([1, 128, total_latents, derived_h // 32, derived_w // 32], device=comfy.model_management.intermediate_device()),
+                    "noise_mask": torch.ones((1, 1, total_latents, derived_h // 32, derived_w // 32), dtype=torch.float32, device=comfy.model_management.intermediate_device())
+                }
+            else:
+                latent = optional_latent
+                
+            if negative is None:
+                neg_tokens = clip.tokenize("worst quality, blurry, low resolution, jittery, low geometry, bad details")
+                conditioning_neg = clip.encode_from_tokens_scheduled(neg_tokens)
+            else:
+                conditioning_neg = negative
 
         ltxv_length = ((total_latents - 1) * 8) + 1 
         audio_out = _build_combined_audio(timeline_data, ltxv_length, float(frame_rate))
@@ -932,7 +1069,6 @@ class LTXDirector(io.ComfyNode):
                         if latent_samples.numel() == 0:
                             raise ValueError("Encoded audio latent is empty (0 elements).")
                         
-                        # Fix variable shadowing: renamed audio mask tensor to prevent overwriting video mask
                         audio_mask_tensor = torch.full(
                             (1, latent_samples.shape[-2], latent_samples.shape[-1]), 
                             0.0, 
@@ -948,34 +1084,19 @@ class LTXDirector(io.ComfyNode):
                     else:
                         raise ValueError("No audio waveform to encode.")
                 except Exception as e:
-                    log.error("[PromptRelay] Failed to generate custom audio latent: %s", e)
+                    log.warning("[PromptRelay] Failed to generate custom audio latent: %s", e)
                     raise e
             else:
                 try:
                     audio_latent = get_empty_latent()
                 except Exception as e:
-                    log.error("[PromptRelay] Could not generate empty audio latent: %s", e)
+                    log.warning("[PromptRelay] Could not generate empty audio latent: %s", e)
                     raise e
-
-        if save_prompts_to_file:
-            try:
-                formatted_text = _format_timeline_to_text(
-                    processed_global, duration_frames, float(frame_rate), epsilon,
-                    custom_width, custom_height, resize_method,
-                    timeline_data, processed_local, segment_lengths, guide_strength
-                )
-                out_dir = folder_paths.get_output_directory()
-                filename = f"ltx_director_prompts_{int(time.time())}.txt"
-                filepath = os.path.join(out_dir, filename)
-                with open(filepath, "w", encoding="utf-8") as f:
-                    f.write(formatted_text)
-                log.info(f"[PromptRelay] Saved timeline prompts to {filepath}")
-            except Exception as e:
-                log.warning(f"[PromptRelay] Failed to save prompts to txt: {e}")
 
         return io.NodeOutput(
             patched, 
             conditioning, 
+            conditioning_neg, 
             latent, 
             audio_latent, 
             guide_data, 

@@ -45,7 +45,7 @@ This node uses Ollama Locally : you will need to install it (very lightweight) a
 
 - You can still enter your description manually if you don't want to install it but it works very well!
 
-- Only Ghost Mask (end) works, I've been trying for two days with Licon MSR but it is not working yet
+- Both references mode work (fixed), Licon MSR and Ghost Mask.
 
 - Use their Lora, that is an important step : https://huggingface.co/LiconStudio/LTX-2.3-Multiple-Subject-Reference/tree/main
 

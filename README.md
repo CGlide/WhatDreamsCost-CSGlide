@@ -8,6 +8,10 @@ All of my nodes are created with the help of AI, so there may or may not be redu
 
 ## ▶️ YouTube Tutorial Videos
 
+<a href="https://youtu.be/j28z5PZXkKk?si=TPeWKm2BW-uA3BAx">
+<img width="642" height="718" alt="Capture d&#39;écran 2026-06-17 234136" src="https://github.com/user-attachments/assets/89433110-8b78-4971-8098-3a9e9226f460" />
+
+
 <table>
   <tr>
     <td>

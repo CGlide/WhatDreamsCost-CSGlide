@@ -865,6 +865,12 @@ class LTXDirector(io.ComfyNode):
                 global_prompt, local_prompts, char1_val, char2_val, char3_val
             )
 
+        # If no global prompt was entered, fall back to the first timeline/local prompt as
+        # the global anchor (restores prior behaviour; avoids an empty tail segment in the
+        # relay, which would otherwise trip the 'segment missing a prompt' guard).
+        if not (processed_global or "").strip() and processed_local:
+            processed_global = processed_local.split("|")[0].strip()
+
         # ====== LICON MSR DIRECTOR ENGINE (relay-aware) ======
         # Axis separation, so the relay and IC-LoRA never fight over the same bookkeeping:
         #   - Character slots  -> IDENTITY. Built into the IC-LoRA slideshow AND pinned as

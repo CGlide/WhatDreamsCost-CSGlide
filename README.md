@@ -53,9 +53,8 @@ This node uses Ollama Locally : you will need to install it (very lightweight) a
 ## ❓ How to install nodes
 
 - Navigate to your `/ComfyUI/custom_nodes/ folder`
-- Delete your old "WhatDreamsCost-ComfyUI" Folder
-- Run `git clone -b main_cs https://github.com/CGlideWhatDreamsCost-CSGlide
-.git`
+
+- Run `git clone -b main_cs https://github.com/CGlideWhatDreamsCost-CSGlide.git`
 
 
 

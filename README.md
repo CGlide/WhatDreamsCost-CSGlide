@@ -8,6 +8,25 @@ Hopefully it will make creating cool stuff easier.
 
 All of my nodes are created with the help of AI, so there may or may not be redundant, messy code.
 
+**❗❗IMPORTANT❗❗**
+
+
+This is a Modded LTX director node with some extra options to help you create videos with references sheets
+
+This node uses Ollama Locally : you will need to install it (very lightweight) and 
+
+- In your Ollama model folder run this command to install qwen 3.5 2b q4 (1.9gb) "ollama run huihui_ai/qwen3.5-abliterated:2B"
+
+- The model won't eat memory while generating since there is an auto clear VRAM when you hit Run or after 5min.
+
+- You can still enter your description manually if you don't want to install it but it works very well!
+
+- Both references mode work (fixed), Licon MSR and Ghost Mask.
+
+- Use their Lora, that is an important step : https://huggingface.co/LiconStudio/LTX-2.3-Multiple-Subject-Reference/tree/main
+
+- Enjoy!
+
 ## ▶️ YouTube Tutorial Videos
 
 <a href="https://youtu.be/j28z5PZXkKk?si=TPeWKm2BW-uA3BAx">
@@ -35,27 +54,11 @@ All of my nodes are created with the help of AI, so there may or may not be redu
 
 - Navigate to your `/ComfyUI/custom_nodes/ folder`
 - Delete your old "WhatDreamsCost-ComfyUI" Folder
-- Run `git clone -b main_cs https://github.com/CGlide/WhatDreamsCost-ComfyUI.git`
+- Run `git clone -b main_cs https://github.com/CGlideWhatDreamsCost-CSGlide
+.git`
 
 
-**❗❗IMPORTANT❗❗**
 
-
-This is a Modded LTX director node with some extra options to help you create videos with references sheets
-
-This node uses Ollama Locally : you will need to install it (very lightweight) and 
-
-- In your Ollama model folder run this command to install qwen 3.5 2b q4 (1.9gb) "ollama run huihui_ai/qwen3.5-abliterated:2B"
-
-- The model won't eat memory while generating since there is an auto clear VRAM when you hit Run or after 5min.
-
-- You can still enter your description manually if you don't want to install it but it works very well!
-
-- Both references mode work (fixed), Licon MSR and Ghost Mask.
-
-- Use their Lora, that is an important step : https://huggingface.co/LiconStudio/LTX-2.3-Multiple-Subject-Reference/tree/main
-
-- Enjoy!
 
 <img width="596" height="668" alt="Capture d&#39;écran 2026-06-13 234036" src="https://github.com/user-attachments/assets/2dfe7992-a72a-4eda-a103-41b3a8f77714" />
 

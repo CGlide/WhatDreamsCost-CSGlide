@@ -9,9 +9,9 @@ class LTXDirectorGuide(LTXVAddGuide):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="LTXDirectorGuide",
-            display_name="LTX Director Guide",
-            category="WhatDreamsCost",
+            node_id="LTXDirectorGuideCS",
+            display_name="LTX Director Guide CS",
+            category="WhatDreamsCost CS",
             description=(
                 "Applies guide images from a Prompt Relay Timeline node at the frame positions "
                 "and strengths defined on the timeline. Connect guide_data from the timeline node."

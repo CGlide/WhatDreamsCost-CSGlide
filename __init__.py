@@ -1,9 +1,3 @@
-from .ltx_keyframer import LTXKeyframer
-from .multi_image_loader import MultiImageLoader
-from .ltx_sequencer import LTXSequencer
-from .speech_length_calculator import SpeechLengthCalculator
-from .load_audio_ui import LoadAudioUI
-from .load_video_ui import LoadVideoUI
 from .ltx_director import LTXDirector
 from .ltx_director_guide import LTXDirectorGuide
 from comfy_api.latest import ComfyExtension, io
@@ -20,29 +14,17 @@ class PromptRelay(ComfyExtension):
 
 async def comfy_entrypoint() -> PromptRelay:
     return PromptRelay()
-    
+
 NODE_CLASS_MAPPINGS = {
-    "LTXKeyframer": LTXKeyframer,
-    "MultiImageLoader": MultiImageLoader,
-    "LTXSequencer": LTXSequencer,
-    "SpeechLengthCalculator": SpeechLengthCalculator,
-    "LoadAudioUI": LoadAudioUI,
-    "LoadVideoUI": LoadVideoUI,
-    "LTXDirector": LTXDirector,
-    "LTXDirectorGuide": LTXDirectorGuide,
-    "CleanLatentSlice": CleanLatentSlice,
+    "LTXDirectorCS": LTXDirector,
+    "LTXDirectorGuideCS": LTXDirectorGuide,
+    "CleanLatentSliceCS": CleanLatentSlice,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "LTXKeyframer": "LTX Keyframer",
-    "MultiImageLoader": "Multi Image Loader",
-    "LTXSequencer": "LTX Sequencer",
-    "SpeechLengthCalculator": "Speech Length Calculator",
-    "LoadAudioUI": "Load Audio UI",
-    "LoadVideoUI": "Load Video UI",
-    "LTXDirector": "LTX Director",
-    "LTXDirectorGuide": "LTX Director Guide",
-    "CleanLatentSlice": "Clean Latent Slice",
+    "LTXDirectorCS": "LTX Director CS",
+    "LTXDirectorGuideCS": "LTX Director Guide CS",
+    "CleanLatentSliceCS": "Clean Latent Slice CS",
 }
 
 WEB_DIRECTORY = "./js"

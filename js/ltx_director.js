@@ -43,98 +43,98 @@ function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
 // --- Modern Dark/Grey UI CSS (ComfyUI Match) ---
 const STYLES = `
-  .pr-wrapper { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; display: flex; flex-direction: column; gap: 8px; width: 100%; height: 100%; box-sizing: border-box; padding-bottom: 4px; }
-  .pr-wrapper.drag-active { outline: 2px dashed #888; background: rgba(255, 255, 255, 0.05); border-radius: 6px; }
-  .pr-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 2px 0px; flex-wrap: wrap; gap: 6px; flex-shrink: 0; }
-  .pr-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-  .pr-btn { background: #222; color: #e0e0e0; border: 1px solid #111; border-radius: 4px; padding: 6px 12px; font-size: 11px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s ease; }
-  .pr-btn:hover { background: #333; border-color: #555; }
-  .pr-btn-danger:hover { background: #4a1515; border-color: #cc4444; color: #ffaaaa; }
-  .pr-canvas { border-radius: 6px; border: 1px solid #111; background: #2a2a2a; cursor: pointer; width: 100%; outline: none; display: block; }
-  .pr-prop-container { display: flex; flex-direction: column; width: 100%; flex-grow: 1; min-height: 40px; }
-  .pr-prompt-area { width: 100%; height: 100%; background: #222; color: #e0e0e0; border: 1px solid #111; border-radius: 6px; padding: 8px; resize: none; font-size: 12px; line-height: 1.4; box-sizing: border-box; outline: none; transition: border-color 0.2s ease; }
-  .pr-prompt-area:focus { border-color: #888; }
-  .pr-audio-info { width: 100%; height: 100%; background: #181818; color: #aaa; border: 1px solid #111; border-radius: 6px; padding: 10px; font-size: 12px; line-height: 1.6; box-sizing: border-box; display: none; }
-  .pr-audio-info span { color: #fff; font-weight: 500; }
-  .pr-controls-group { background: #1e1e1e; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
-  .pr-strength-row { display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box; }
-  .pr-height-resizer { height: 6px; background: #2a2a2a; cursor: ns-resize; border-radius: 3px; margin: 2px 0; transition: background 0.15s; border: 1px solid #1e1e1e; }
-  .pr-height-resizer:hover { background: #444; border-color: #555; }
-  .pr-strength-label { font-size: 11px; font-weight: 600; color: #fff; white-space: nowrap; margin-left: auto; }
-  .pr-strength-slider { -webkit-appearance: none; appearance: none; width: 80px; height: 4px; background: #444; border-radius: 2px; outline: none; cursor: pointer; border: 1px solid #222; }
-  .pr-strength-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #aaa; cursor: pointer; }
-  .pr-strength-slider:disabled { opacity: 0.3; cursor: not-allowed; }
-  .pr-strength-input { font-size: 12px; color: #fff; background: #222; border: 1px solid #444; border-radius: 4px; width: 52px; text-align: center; padding: 3px; }
-  .pr-strength-input::-webkit-outer-spin-button, .pr-strength-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-  .pr-strength-input[type=number] { -moz-appearance: textfield; }
-  .pr-strength-input:disabled { opacity: 0.35; cursor: not-allowed; }
-  .pr-gap-menu { position: fixed; background: #1e1e1e; border: 1px solid #444; border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 4px; z-index: 9999; box-shadow: 0 4px 16px rgba(0,0,0,0.6); }
-  .pr-gap-menu-btn { background: #2a2a2a; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; padding: 6px 14px; font-size: 11px; font-family: inherit; cursor: pointer; text-align: left; white-space: nowrap; display: flex; align-items: center; gap: 6px; transition: background 0.15s ease; }
-  .pr-gap-menu-btn:hover { background: #3a3a3a; border-color: #666; }
-  .pr-player-controls { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 2px 0; flex-wrap: wrap; width: 100%; }
-  .pr-icon-btn { background: #2a2a2a; border: 1px solid #444; color: #eee; cursor: pointer; padding: 6px 12px; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
-  .pr-icon-btn * { pointer-events: none; }
-  .pr-icon-btn:hover { color: #fff; background: #3a3a3a; border-color: #666; }
-  .pr-icon-btn.active { color: #4fff8f; border-color: #4fff8f; background: #1a3a2a; }
-  .pr-seek-bar { -webkit-appearance: none; appearance: none; height: 6px; background: #444; border-radius: 3px; outline: none; cursor: pointer; border: 1px solid #222; }
-  .pr-seek-bar::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #ff4444; cursor: pointer; border: 2px solid #222; }
-  .pr-timeline-viewport { width: 100%; overflow-x: auto; overflow-y: hidden; flex-shrink: 0; }
-  .pr-timeline-viewport::-webkit-scrollbar { height: 10px; }
-  .pr-timeline-viewport::-webkit-scrollbar-track { background: #151515; border-radius: 5px; }
-  .pr-timeline-viewport::-webkit-scrollbar-thumb { background: #444; border-radius: 5px; border: 1px solid #000; }
-  .pr-timeline-viewport::-webkit-scrollbar-thumb:hover { background: #666; border-color: #000; }
-  .pr-zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: 12px; }
-  .pr-zoom-slider { width: 80px; -webkit-appearance: none; appearance: none; height: 4px; background: #444; border-radius: 2px; outline: none; cursor: pointer; }
-  .pr-zoom-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #aaa; cursor: pointer; }
-  .pr-right-group { display: flex; align-items: center; gap: 12px; }
-  .pr-segment-bounds { font-size: 12px; color: #aaa; font-family: monospace; }
-  .pr-timecode { font-size: 14px; font-weight: bold; color: #e0e0e0; font-family: monospace; }
-  .pr-settings-menu { position: fixed; background: #1e1e1e; border: 1px solid #444; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px; z-index: 9999; box-shadow: 0 4px 20px rgba(0,0,0,0.7); min-width: 220px; }
-  .pr-settings-title { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.06em; padding-bottom: 4px; border-bottom: 1px solid #333; margin-bottom: 2px; }
-  .pr-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .pr-settings-label { font-size: 12px; color: #bbb; flex: 1; white-space: nowrap; }
-  .pr-number-control { display: flex; align-items: center; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; overflow: hidden; }
-  .pr-number-btn { background: #333; color: #aaa; border: none; width: 20px; height: 22px; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; transition: background 0.15s; user-select: none; }
-  .pr-number-btn:hover { background: #444; color: #fff; }
-  .pr-settings-input { background: transparent; color: #e0e0e0; border: none; padding: 0 4px; font-size: 12px; width: 50px; height: 22px; text-align: center; font-family: monospace; outline: none; -moz-appearance: textfield; }
-  .pr-settings-input::-webkit-outer-spin-button, .pr-settings-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-  .pr-settings-select { background: #2a2a2a; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 3px 4px; font-size: 12px; width: 98px; cursor: pointer; }
-  .pr-settings-divider { border: none; border-top: 1px solid #2a2a2a; margin: 2px 0; }
-  .pr-settings-toggle-btn { width: 100%; background: #252525; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 5px 8px; font-size: 11px; cursor: pointer; text-align: center; transition: all 0.15s; }
-  .pr-settings-toggle-btn:hover { background: #2e2e2e; color: #ccc; border-color: #555; }
-  .pr-settings-close-btn { background: transparent; color: #888; border: none; cursor: pointer; padding: 2px; display: flex; align-items: center; justify-content: center; border-radius: 4px; transition: all 0.15s; }
-  .pr-settings-close-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
-  .pr-segmented-control { display: flex; background: #1e1e1e; border: 1px solid #333; border-radius: 6px; padding: 2px; width: 110px; height: 22px; align-items: center; box-sizing: border-box; }
-  .pr-segment { flex: 1; text-align: center; font-size: 10px; font-weight: 500; line-height: 18px; cursor: pointer; border-radius: 4px; color: #888; transition: all 0.15s ease; }
-  .pr-segment.active { background: #333; color: #fff; }
-  .pr-segment:hover:not(.active) { color: #ccc; }
-  .pr-characters-container { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
-  .pr-character-slot { flex: 1; background: #1e1e1e; border: 1.5px dashed #444; border-radius: 8px; height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 4px; position: relative; cursor: pointer; overflow: hidden; transition: all 0.2s ease; box-sizing: border-box; }
-  .pr-character-slot:hover { border-color: #666; background: #252525; }
-  .pr-character-slot.drag-over { border-color: #4fff8f; background: rgba(79, 255, 143, 0.05); }
-  .pr-character-label { font-size: 10px; font-weight: bold; color: #888; margin-bottom: 2px; pointer-events: none; }
-  .pr-character-placeholder { font-size: 9px; color: #666; text-align: center; pointer-events: none; margin-top: 10px; }
-  .pr-character-previews-row { display: flex; width: 100%; height: 52px; gap: 4px; position: relative; }
-  .pr-character-preview-wrapper { flex: 1; height: 100%; position: relative; overflow: hidden; border-radius: 3px; background: #111; }
-  .pr-character-preview { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
-  .pr-character-delete { position: absolute; top: 2px; right: 2px; background: rgba(0, 0, 0, 0.85); color: #ff4444; border: none; border-radius: 50%; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 9px; transition: background 0.15s; z-index: 10; padding: 0; }
-  .pr-character-delete:hover { background: #ff4444; color: #fff; }
-  .pr-character-validate-btn { position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.85); color: #e0e0e0; border: 1px solid #444; border-radius: 3px; padding: 2px 8px; font-size: 9px; font-weight: bold; cursor: pointer; transition: all 0.15s; z-index: 20; }
-  .pr-character-validate-btn:hover { background: #4fff8f; color: #000; border-color: #4fff8f; }
-  .pr-character-validate-btn.loading { background: #333; color: #888; cursor: wait; pointer-events: none; }
-  .pr-character-desc { width: 100%; height: 38px; background: #111; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; font-size: 9px; resize: none; box-sizing: border-box; padding: 2px 4px; margin-top: 10px; outline: none; font-family: inherit; z-index: 10; }
-  .pr-character-desc:focus { border-color: #4fff8f; }
-  .pr-autocomplete-menu { position: fixed; background: #181818; border: 1px solid #444; border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; z-index: 100000; box-shadow: 0 4px 16px rgba(0,0,0,0.6); min-width: 180px; max-height: 200px; overflow-y: auto; }
-  .pr-autocomplete-item { background: #252525; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 6px 12px; font-size: 11px; font-family: monospace; cursor: pointer; text-align: left; display: flex; align-items: center; justify-content: space-between; transition: all 0.15s ease; }
-  .pr-autocomplete-item:hover, .pr-autocomplete-item.active { background: #1c222d; color: #4fff8f; border-color: #4fff8f; }
-  .pr-autocomplete-item span { font-weight: bold; font-size: 12px; }
-  .pr-autocomplete-item small { color: #777; font-size: 10px; }
-  .pr-autocomplete-item.active small { color: #4fff8f; opacity: 0.8; }
+  .prcs-wrapper { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; display: flex; flex-direction: column; gap: 8px; width: 100%; height: 100%; box-sizing: border-box; padding-bottom: 4px; }
+  .prcs-wrapper.drag-active { outline: 2px dashed #888; background: rgba(255, 255, 255, 0.05); border-radius: 6px; }
+  .prcs-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 2px 0px; flex-wrap: wrap; gap: 6px; flex-shrink: 0; }
+  .prcs-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .prcs-btn { background: #222; color: #e0e0e0; border: 1px solid #111; border-radius: 4px; padding: 6px 12px; font-size: 11px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s ease; }
+  .prcs-btn:hover { background: #333; border-color: #555; }
+  .prcs-btn-danger:hover { background: #4a1515; border-color: #cc4444; color: #ffaaaa; }
+  .prcs-canvas { border-radius: 6px; border: 1px solid #111; background: #2a2a2a; cursor: pointer; width: 100%; outline: none; display: block; }
+  .prcs-prop-container { display: flex; flex-direction: column; width: 100%; flex-grow: 1; min-height: 40px; }
+  .prcs-prompt-area { width: 100%; height: 100%; background: #222; color: #e0e0e0; border: 1px solid #111; border-radius: 6px; padding: 8px; resize: none; font-size: 12px; line-height: 1.4; box-sizing: border-box; outline: none; transition: border-color 0.2s ease; }
+  .prcs-prompt-area:focus { border-color: #888; }
+  .prcs-audio-info { width: 100%; height: 100%; background: #181818; color: #aaa; border: 1px solid #111; border-radius: 6px; padding: 10px; font-size: 12px; line-height: 1.6; box-sizing: border-box; display: none; }
+  .prcs-audio-info span { color: #fff; font-weight: 500; }
+  .prcs-controls-group { background: #1e1e1e; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
+  .prcs-strength-row { display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box; }
+  .prcs-height-resizer { height: 6px; background: #2a2a2a; cursor: ns-resize; border-radius: 3px; margin: 2px 0; transition: background 0.15s; border: 1px solid #1e1e1e; }
+  .prcs-height-resizer:hover { background: #444; border-color: #555; }
+  .prcs-strength-label { font-size: 11px; font-weight: 600; color: #fff; white-space: nowrap; margin-left: auto; }
+  .prcs-strength-slider { -webkit-appearance: none; appearance: none; width: 80px; height: 4px; background: #444; border-radius: 2px; outline: none; cursor: pointer; border: 1px solid #222; }
+  .prcs-strength-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #aaa; cursor: pointer; }
+  .prcs-strength-slider:disabled { opacity: 0.3; cursor: not-allowed; }
+  .prcs-strength-input { font-size: 12px; color: #fff; background: #222; border: 1px solid #444; border-radius: 4px; width: 52px; text-align: center; padding: 3px; }
+  .prcs-strength-input::-webkit-outer-spin-button, .prcs-strength-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .prcs-strength-input[type=number] { -moz-appearance: textfield; }
+  .prcs-strength-input:disabled { opacity: 0.35; cursor: not-allowed; }
+  .prcs-gap-menu { position: fixed; background: #1e1e1e; border: 1px solid #444; border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 4px; z-index: 9999; box-shadow: 0 4px 16px rgba(0,0,0,0.6); }
+  .prcs-gap-menu-btn { background: #2a2a2a; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; padding: 6px 14px; font-size: 11px; font-family: inherit; cursor: pointer; text-align: left; white-space: nowrap; display: flex; align-items: center; gap: 6px; transition: background 0.15s ease; }
+  .prcs-gap-menu-btn:hover { background: #3a3a3a; border-color: #666; }
+  .prcs-player-controls { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 2px 0; flex-wrap: wrap; width: 100%; }
+  .prcs-icon-btn { background: #2a2a2a; border: 1px solid #444; color: #eee; cursor: pointer; padding: 6px 12px; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+  .prcs-icon-btn * { pointer-events: none; }
+  .prcs-icon-btn:hover { color: #fff; background: #3a3a3a; border-color: #666; }
+  .prcs-icon-btn.active { color: #4fff8f; border-color: #4fff8f; background: #1a3a2a; }
+  .prcs-seek-bar { -webkit-appearance: none; appearance: none; height: 6px; background: #444; border-radius: 3px; outline: none; cursor: pointer; border: 1px solid #222; }
+  .prcs-seek-bar::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #ff4444; cursor: pointer; border: 2px solid #222; }
+  .prcs-timeline-viewport { width: 100%; overflow-x: auto; overflow-y: hidden; flex-shrink: 0; }
+  .prcs-timeline-viewport::-webkit-scrollbar { height: 10px; }
+  .prcs-timeline-viewport::-webkit-scrollbar-track { background: #151515; border-radius: 5px; }
+  .prcs-timeline-viewport::-webkit-scrollbar-thumb { background: #444; border-radius: 5px; border: 1px solid #000; }
+  .prcs-timeline-viewport::-webkit-scrollbar-thumb:hover { background: #666; border-color: #000; }
+  .prcs-zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: 12px; }
+  .prcs-zoom-slider { width: 80px; -webkit-appearance: none; appearance: none; height: 4px; background: #444; border-radius: 2px; outline: none; cursor: pointer; }
+  .prcs-zoom-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #aaa; cursor: pointer; }
+  .prcs-right-group { display: flex; align-items: center; gap: 12px; }
+  .prcs-segment-bounds { font-size: 12px; color: #aaa; font-family: monospace; }
+  .prcs-timecode { font-size: 14px; font-weight: bold; color: #e0e0e0; font-family: monospace; }
+  .prcs-settings-menu { position: fixed; background: #1e1e1e; border: 1px solid #444; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px; z-index: 9999; box-shadow: 0 4px 20px rgba(0,0,0,0.7); min-width: 220px; }
+  .prcs-settings-title { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.06em; padding-bottom: 4px; border-bottom: 1px solid #333; margin-bottom: 2px; }
+  .prcs-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .prcs-settings-label { font-size: 12px; color: #bbb; flex: 1; white-space: nowrap; }
+  .prcs-number-control { display: flex; align-items: center; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; overflow: hidden; }
+  .prcs-number-btn { background: #333; color: #aaa; border: none; width: 20px; height: 22px; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; transition: background 0.15s; user-select: none; }
+  .prcs-number-btn:hover { background: #444; color: #fff; }
+  .prcs-settings-input { background: transparent; color: #e0e0e0; border: none; padding: 0 4px; font-size: 12px; width: 50px; height: 22px; text-align: center; font-family: monospace; outline: none; -moz-appearance: textfield; }
+  .prcs-settings-input::-webkit-outer-spin-button, .prcs-settings-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .prcs-settings-select { background: #2a2a2a; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 3px 4px; font-size: 12px; width: 98px; cursor: pointer; }
+  .prcs-settings-divider { border: none; border-top: 1px solid #2a2a2a; margin: 2px 0; }
+  .prcs-settings-toggle-btn { width: 100%; background: #252525; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 5px 8px; font-size: 11px; cursor: pointer; text-align: center; transition: all 0.15s; }
+  .prcs-settings-toggle-btn:hover { background: #2e2e2e; color: #ccc; border-color: #555; }
+  .prcs-settings-close-btn { background: transparent; color: #888; border: none; cursor: pointer; padding: 2px; display: flex; align-items: center; justify-content: center; border-radius: 4px; transition: all 0.15s; }
+  .prcs-settings-close-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+  .prcs-segmented-control { display: flex; background: #1e1e1e; border: 1px solid #333; border-radius: 6px; padding: 2px; width: 110px; height: 22px; align-items: center; box-sizing: border-box; }
+  .prcs-segment { flex: 1; text-align: center; font-size: 10px; font-weight: 500; line-height: 18px; cursor: pointer; border-radius: 4px; color: #888; transition: all 0.15s ease; }
+  .prcs-segment.active { background: #333; color: #fff; }
+  .prcs-segment:hover:not(.active) { color: #ccc; }
+  .prcs-characters-container { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; box-sizing: border-box; width: 100%; flex-shrink: 0; }
+  .prcs-character-slot { flex: 1; background: #1e1e1e; border: 1.5px dashed #444; border-radius: 8px; height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 4px; position: relative; cursor: pointer; overflow: hidden; transition: all 0.2s ease; box-sizing: border-box; }
+  .prcs-character-slot:hover { border-color: #666; background: #252525; }
+  .prcs-character-slot.drag-over { border-color: #4fff8f; background: rgba(79, 255, 143, 0.05); }
+  .prcs-character-label { font-size: 10px; font-weight: bold; color: #888; margin-bottom: 2px; pointer-events: none; }
+  .prcs-character-placeholder { font-size: 9px; color: #666; text-align: center; pointer-events: none; margin-top: 10px; }
+  .prcs-character-previews-row { display: flex; width: 100%; height: 52px; gap: 4px; position: relative; }
+  .prcs-character-preview-wrapper { flex: 1; height: 100%; position: relative; overflow: hidden; border-radius: 3px; background: #111; }
+  .prcs-character-preview { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+  .prcs-character-delete { position: absolute; top: 2px; right: 2px; background: rgba(0, 0, 0, 0.85); color: #ff4444; border: none; border-radius: 50%; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 9px; transition: background 0.15s; z-index: 10; padding: 0; }
+  .prcs-character-delete:hover { background: #ff4444; color: #fff; }
+  .prcs-character-validate-btn { position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.85); color: #e0e0e0; border: 1px solid #444; border-radius: 3px; padding: 2px 8px; font-size: 9px; font-weight: bold; cursor: pointer; transition: all 0.15s; z-index: 20; }
+  .prcs-character-validate-btn:hover { background: #4fff8f; color: #000; border-color: #4fff8f; }
+  .prcs-character-validate-btn.loading { background: #333; color: #888; cursor: wait; pointer-events: none; }
+  .prcs-character-desc { width: 100%; height: 38px; background: #111; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; font-size: 9px; resize: none; box-sizing: border-box; padding: 2px 4px; margin-top: 10px; outline: none; font-family: inherit; z-index: 10; }
+  .prcs-character-desc:focus { border-color: #4fff8f; }
+  .prcs-autocomplete-menu { position: fixed; background: #181818; border: 1px solid #444; border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; z-index: 100000; box-shadow: 0 4px 16px rgba(0,0,0,0.6); min-width: 180px; max-height: 200px; overflow-y: auto; }
+  .prcs-autocomplete-item { background: #252525; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 6px 12px; font-size: 11px; font-family: monospace; cursor: pointer; text-align: left; display: flex; align-items: center; justify-content: space-between; transition: all 0.15s ease; }
+  .prcs-autocomplete-item:hover, .prcs-autocomplete-item.active { background: #1c222d; color: #4fff8f; border-color: #4fff8f; }
+  .prcs-autocomplete-item span { font-weight: bold; font-size: 12px; }
+  .prcs-autocomplete-item small { color: #777; font-size: 10px; }
+  .prcs-autocomplete-item.active small { color: #4fff8f; opacity: 0.8; }
 `;
 
-if (!document.getElementById("prompt-relay-styles")) {
+if (!document.getElementById("prompt-relay-styles-cs")) {
   const styleEl = document.createElement("style");
-  styleEl.id = "prompt-relay-styles";
+  styleEl.id = "prompt-relay-styles-cs";
   styleEl.textContent = STYLES;
   document.head.appendChild(styleEl);
 }
@@ -443,7 +443,7 @@ class TimelineEditor {
 
   createDOM() {
     this.wrapper = document.createElement("div");
-    this.wrapper.className = "pr-wrapper";
+    this.wrapper.className = "prcs-wrapper";
 
     this.wrapper.addEventListener("mouseenter", () => { this._isHovering = true; });
     this.wrapper.addEventListener("mouseleave", () => { this._isHovering = false; });
@@ -485,10 +485,10 @@ class TimelineEditor {
 
     // --- Toolbar ---
     const toolbar = document.createElement("div");
-    toolbar.className = "pr-toolbar";
+    toolbar.className = "prcs-toolbar";
 
     const actionGroup = document.createElement("div");
-    actionGroup.className = "pr-actions";
+    actionGroup.className = "prcs-actions";
 
     this.fileInput = document.createElement("input");
     this.fileInput.type = "file";
@@ -505,22 +505,22 @@ class TimelineEditor {
     this.audioFileInput.addEventListener("change", (e) => this.handleAudioUpload(e.target.files));
 
     const uploadBtn = document.createElement("button");
-    uploadBtn.className = "pr-btn";
+    uploadBtn.className = "prcs-btn";
     uploadBtn.innerHTML = `${ICONS.upload} Add Image`;
     uploadBtn.addEventListener("click", () => this.fileInput.click());
 
     const uploadAudioBtn = document.createElement("button");
-    uploadAudioBtn.className = "pr-btn";
+    uploadAudioBtn.className = "prcs-btn";
     uploadAudioBtn.innerHTML = `${ICONS.audio} Add Audio`;
     uploadAudioBtn.addEventListener("click", () => this.audioFileInput.click());
 
     const addTextBtn = document.createElement("button");
-    addTextBtn.className = "pr-btn";
+    addTextBtn.className = "prcs-btn";
     addTextBtn.innerHTML = `${ICONS.text} Add Text`;
     addTextBtn.addEventListener("click", () => this.addTextSegmentFreeSpace());
 
     const deleteBtn = document.createElement("button");
-    deleteBtn.className = "pr-btn pr-btn-danger";
+    deleteBtn.className = "prcs-btn prcs-btn-danger";
     deleteBtn.innerHTML = `${ICONS.trash} Delete`;
     deleteBtn.addEventListener("click", () => this.deleteSelectedSegment());
 
@@ -533,18 +533,18 @@ class TimelineEditor {
     toolbar.appendChild(actionGroup);
 
     const rightGroup = document.createElement("div");
-    rightGroup.className = "pr-right-group";
+    rightGroup.className = "prcs-right-group";
 
     this.segmentBoundsDisplay = document.createElement("div");
-    this.segmentBoundsDisplay.className = "pr-segment-bounds";
+    this.segmentBoundsDisplay.className = "prcs-segment-bounds";
     this.segmentBoundsDisplay.textContent = "Start: - | End: -";
 
     this.timeCodeDisplay = document.createElement("div");
-    this.timeCodeDisplay.className = "pr-timecode";
+    this.timeCodeDisplay.className = "prcs-timecode";
     this.timeCodeDisplay.textContent = this.formatTime(0);
 
     const settingsBtn = document.createElement("button");
-    settingsBtn.className = "pr-btn";
+    settingsBtn.className = "prcs-btn";
     settingsBtn.style.padding = "6px";
     settingsBtn.style.justifyContent = "center";
     settingsBtn.style.width = "28px";
@@ -562,7 +562,7 @@ class TimelineEditor {
     });
 
     const toggleBtn = document.createElement("button");
-    toggleBtn.className = "pr-btn";
+    toggleBtn.className = "prcs-btn";
     toggleBtn.style.padding = "6px 8px";
     toggleBtn.style.fontSize = "11px";
     toggleBtn.style.marginRight = "0px";
@@ -601,7 +601,7 @@ class TimelineEditor {
     }, 100);
 
     const helpBtn = document.createElement("button");
-    helpBtn.className = "pr-btn";
+    helpBtn.className = "prcs-btn";
     helpBtn.style.padding = "6px";
     helpBtn.style.justifyContent = "center";
     helpBtn.style.width = "28px";
@@ -627,7 +627,7 @@ class TimelineEditor {
 
     // --- Canvas & Viewport ---
     this.viewport = document.createElement("div");
-    this.viewport.className = "pr-timeline-viewport";
+    this.viewport.className = "prcs-timeline-viewport";
 
     this.viewport.addEventListener("wheel", (e) => {
       if (e.ctrlKey || e.metaKey) {
@@ -649,7 +649,7 @@ class TimelineEditor {
     }, { passive: false, capture: true });
 
     this.canvas = document.createElement("canvas");
-    this.canvas.className = "pr-canvas";
+    this.canvas.className = "prcs-canvas";
     this.ctx = this.canvas.getContext("2d");
     this.canvas.style.width = "100%";
 
@@ -661,14 +661,14 @@ class TimelineEditor {
 
     // --- Content Area Container ---
     const propContainer = document.createElement("div");
-    propContainer.className = "pr-prop-container";
+    propContainer.className = "prcs-prop-container";
 
     // Visual character references setup
     this.createCharacterSlots(propContainer);
 
     // --- Text Area (Image/Text) ---
     this.promptInput = document.createElement("textarea");
-    this.promptInput.className = "pr-prompt-area";
+    this.promptInput.className = "prcs-prompt-area";
     this.promptInput.placeholder = "Enter prompt for selected segment... Type '@' for character shortcuts.";
     this.promptInput.addEventListener("input", () => {
       if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
@@ -679,7 +679,7 @@ class TimelineEditor {
 
     // --- Audio Info Area ---
     this.audioInfoArea = document.createElement("div");
-    this.audioInfoArea.className = "pr-audio-info";
+    this.audioInfoArea.className = "prcs-audio-info";
 
     propContainer.appendChild(this.promptInput);
     propContainer.appendChild(this.audioInfoArea);
@@ -792,15 +792,15 @@ class TimelineEditor {
     this.wrapper.appendChild(this.viewport);
 
     this.strengthRow = document.createElement("div");
-    this.strengthRow.className = "pr-strength-row";
+    this.strengthRow.className = "prcs-strength-row";
 
     const strengthLabel = document.createElement("span");
-    strengthLabel.className = "pr-strength-label";
+    strengthLabel.className = "prcs-strength-label";
     strengthLabel.textContent = "Guide Strength:";
 
     this.strengthValue = document.createElement("input");
     this.strengthValue.type = "text";
-    this.strengthValue.className = "pr-strength-input";
+    this.strengthValue.className = "prcs-strength-input";
     this.strengthValue.value = "1.00";
     this.strengthValue.disabled = true;
     this.strengthValue.style.cursor = "ew-resize";
@@ -874,14 +874,14 @@ class TimelineEditor {
     this.strengthRow.appendChild(this.strengthValue);
 
     this.playBtn = document.createElement("button");
-    this.playBtn.className = "pr-icon-btn";
+    this.playBtn.className = "prcs-icon-btn";
     this.playBtn.style.padding = "4px";
     this.playBtn.innerHTML = ICONS.play;
     this.playBtn.title = "Play/Pause Audio";
     this.playBtn.addEventListener("click", () => this.togglePlay());
 
     this.loopBtn = document.createElement("button");
-    this.loopBtn.className = "pr-icon-btn";
+    this.loopBtn.className = "prcs-icon-btn";
     this.loopBtn.style.padding = "4px";
     this.loopBtn.innerHTML = ICONS.loop;
     this.loopBtn.title = "Toggle Loop";
@@ -889,7 +889,7 @@ class TimelineEditor {
 
     this.seekBar = document.createElement("input");
     this.seekBar.type = "range";
-    this.seekBar.className = "pr-seek-bar";
+    this.seekBar.className = "prcs-seek-bar";
     this.seekBar.min = "0";
     this.seekBar.value = "0";
     this.seekBar.style.flex = "1"; 
@@ -902,10 +902,10 @@ class TimelineEditor {
     });
 
     const zoomControls = document.createElement("div");
-    zoomControls.className = "pr-zoom-controls";
+    zoomControls.className = "prcs-zoom-controls";
 
     const zoomOutBtn = document.createElement("button");
-    zoomOutBtn.className = "pr-icon-btn";
+    zoomOutBtn.className = "prcs-icon-btn";
     zoomOutBtn.style.padding = "4px";
     zoomOutBtn.innerHTML = ICONS.minus;
     zoomOutBtn.title = "Zoom Out";
@@ -917,7 +917,7 @@ class TimelineEditor {
 
     this.zoomSlider = document.createElement("input");
     this.zoomSlider.type = "range";
-    this.zoomSlider.className = "pr-zoom-slider";
+    this.zoomSlider.className = "prcs-zoom-slider";
     this.zoomSlider.min = "1";
     this.zoomSlider.max = "1"; 
     this.zoomSlider.step = "0.1";
@@ -941,7 +941,7 @@ class TimelineEditor {
     });
 
     const zoomInBtn = document.createElement("button");
-    zoomInBtn.className = "pr-icon-btn";
+    zoomInBtn.className = "prcs-icon-btn";
     zoomInBtn.style.padding = "4px";
     zoomInBtn.innerHTML = ICONS.plus;
     zoomInBtn.title = "Zoom In";
@@ -952,7 +952,7 @@ class TimelineEditor {
     });
 
     const zoomFitBtn = document.createElement("button");
-    zoomFitBtn.className = "pr-icon-btn";
+    zoomFitBtn.className = "prcs-icon-btn";
     zoomFitBtn.style.padding = "4px";
     zoomFitBtn.style.marginLeft = "4px";
     zoomFitBtn.innerHTML = ICONS.fit;
@@ -974,14 +974,14 @@ class TimelineEditor {
     zoomControls.appendChild(zoomFitBtn);
 
     const playerControls = document.createElement("div");
-    playerControls.className = "pr-player-controls";
+    playerControls.className = "prcs-player-controls";
     playerControls.appendChild(this.playBtn);
     playerControls.appendChild(this.loopBtn);
     playerControls.appendChild(this.seekBar);
     playerControls.appendChild(zoomControls);
 
     const controlsGroup = document.createElement("div");
-    controlsGroup.className = "pr-controls-group";
+    controlsGroup.className = "prcs-controls-group";
     controlsGroup.appendChild(this.strengthRow);
     controlsGroup.appendChild(playerControls);
 
@@ -996,7 +996,7 @@ class TimelineEditor {
   // --- Visual Character Reference Slots ---
   createCharacterSlots(parent) {
     const container = document.createElement("div");
-    container.className = "pr-characters-container";
+    container.className = "prcs-characters-container";
     
     if (!this.timeline.characters) {
       this.timeline.characters = [
@@ -1010,7 +1010,7 @@ class TimelineEditor {
     
     for (let i = 0; i < 3; i++) {
       const slot = document.createElement("div");
-      slot.className = "pr-character-slot";
+      slot.className = "prcs-character-slot";
       slot.dataset.index = i;
       
       slot.addEventListener("dragover", (e) => {
@@ -1034,9 +1034,9 @@ class TimelineEditor {
       });
       
       slot.addEventListener("click", (e) => {
-        if (e.target.closest(".pr-character-delete") || 
-            e.target.closest(".pr-character-validate-btn") || 
-            e.target.closest(".pr-character-desc")) return;
+        if (e.target.closest(".prcs-character-delete") || 
+            e.target.closest(".prcs-character-validate-btn") || 
+            e.target.closest(".prcs-character-desc")) return;
         
         const fi = document.createElement("input");
         fi.type = "file";
@@ -1120,19 +1120,19 @@ class TimelineEditor {
       
       if (data.images && data.images.length > 0) {
         const previewsRow = document.createElement("div");
-        previewsRow.className = "pr-character-previews-row";
+        previewsRow.className = "prcs-character-previews-row";
 
         data.images.forEach((imgData, imgIdx) => {
           const imgWrapper = document.createElement("div");
-          imgWrapper.className = "pr-character-preview-wrapper";
+          imgWrapper.className = "prcs-character-preview-wrapper";
           
           const img = document.createElement("img");
-          img.className = "pr-character-preview";
+          img.className = "prcs-character-preview";
           img.src = imgData.b64;
           imgWrapper.appendChild(img);
 
           const delBtn = document.createElement("button");
-          delBtn.className = "pr-character-delete";
+          delBtn.className = "prcs-character-delete";
           delBtn.innerHTML = ICONS.close;
           delBtn.title = "Delete Image";
           delBtn.addEventListener("click", (e) => {
@@ -1148,7 +1148,7 @@ class TimelineEditor {
         });
 
         const valBtn = document.createElement("button");
-        valBtn.className = "pr-character-validate-btn";
+        valBtn.className = "prcs-character-validate-btn";
         valBtn.textContent = data.description ? "Re-Analyze" : "Analyze";
         valBtn.title = "Run Gemma 4 Multimodal Analysis";
         valBtn.style.left = "50%";
@@ -1163,7 +1163,7 @@ class TimelineEditor {
         slot.appendChild(previewsRow);
 
         const descInput = document.createElement("textarea");
-        descInput.className = "pr-character-desc";
+        descInput.className = "prcs-character-desc";
         descInput.value = data.description || "";
         descInput.placeholder = "manual description...";
         descInput.addEventListener("input", () => {
@@ -1176,11 +1176,11 @@ class TimelineEditor {
         slot.appendChild(descInput);
       } else {
         const label = document.createElement("div");
-        label.className = "pr-character-label";
+        label.className = "prcs-character-label";
         label.textContent = `@char${i+1}`;
         
         const placeholder = document.createElement("div");
-        placeholder.className = "pr-character-placeholder";
+        placeholder.className = "prcs-character-placeholder";
         placeholder.innerHTML = `${ICONS.upload}<br>Drop Sheet`;
         
         slot.appendChild(label);
@@ -1257,7 +1257,7 @@ class TimelineEditor {
     if (!input) return;
 
     const menu = document.createElement("div");
-    menu.className = "pr-autocomplete-menu";
+    menu.className = "prcs-autocomplete-menu";
     menu.style.display = "none";
     document.body.appendChild(menu);
     this._autocompleteMenu = menu;
@@ -1306,7 +1306,7 @@ class TimelineEditor {
 
       filtered.forEach((s, idx) => {
         const item = document.createElement("div");
-        item.className = "pr-autocomplete-item" + (idx === activeIndex ? " active" : "");
+        item.className = "prcs-autocomplete-item" + (idx === activeIndex ? " active" : "");
         item.innerHTML = `<span>${s.tag}</span><small>${s.label}</small>`;
         
         item.addEventListener("mousedown", (e) => {
@@ -1339,7 +1339,7 @@ class TimelineEditor {
 
     input.addEventListener("keydown", (e) => {
       if (showMenu) {
-        const items = menu.querySelectorAll(".pr-autocomplete-item");
+        const items = menu.querySelectorAll(".prcs-autocomplete-item");
         if (items.length === 0) return;
 
         if (e.key === "ArrowDown") {
@@ -2931,7 +2931,7 @@ onMouseUp(e) {
   showContextMenu(clientX, clientY, seg, trackType) {
     this.dismissContextMenu();
     const menu = document.createElement("div");
-    menu.className = "pr-gap-menu";
+    menu.className = "prcs-gap-menu";
     menu.style.left = `${clientX + 6}px`;
     menu.style.top = `${clientY - 10}px`;
 
@@ -2939,7 +2939,7 @@ onMouseUp(e) {
 
     if (isImage) {
       const copyBtn = document.createElement("button");
-      copyBtn.className = "pr-gap-menu-btn";
+      copyBtn.className = "prcs-gap-menu-btn";
       copyBtn.innerHTML = `Copy Image`;
       copyBtn.onclick = async () => {
         try {
@@ -2954,7 +2954,7 @@ onMouseUp(e) {
       menu.appendChild(copyBtn);
 
       const saveBtn = document.createElement("button");
-      saveBtn.className = "pr-gap-menu-btn";
+      saveBtn.className = "prcs-gap-menu-btn";
       saveBtn.innerHTML = `Save Image`;
       saveBtn.onclick = () => {
         const a = document.createElement("a");
@@ -2966,7 +2966,7 @@ onMouseUp(e) {
       menu.appendChild(saveBtn);
 
       const openBtn = document.createElement("button");
-      openBtn.className = "pr-gap-menu-btn";
+      openBtn.className = "prcs-gap-menu-btn";
       openBtn.innerHTML = `Open Image in New Tab`;
       openBtn.onclick = () => {
         const win = window.open();
@@ -2981,7 +2981,7 @@ onMouseUp(e) {
 
     if (trackType !== "audio") {
       const copyPromptBtn = document.createElement("button");
-      copyPromptBtn.className = "pr-gap-menu-btn";
+      copyPromptBtn.className = "prcs-gap-menu-btn";
       copyPromptBtn.innerHTML = `Copy Prompt`;
       copyPromptBtn.onclick = async () => {
         try {
@@ -2995,7 +2995,7 @@ onMouseUp(e) {
     }
 
     const copySegBtn = document.createElement("button");
-    copySegBtn.className = "pr-gap-menu-btn";
+    copySegBtn.className = "prcs-gap-menu-btn";
     copySegBtn.innerHTML = `Copy Segment`;
     copySegBtn.onclick = () => {
       this._copiedSegment = { ...seg, id: Date.now().toString() + Math.random().toString(36).substr(2, 5) };
@@ -3007,7 +3007,7 @@ onMouseUp(e) {
     const currentTrack = trackType === "audio" ? "audio" : "image";
     if (this._copiedSegment && this._copiedSegmentTrack === currentTrack) {
       const pasteReplaceBtn = document.createElement("button");
-      pasteReplaceBtn.className = "pr-gap-menu-btn";
+      pasteReplaceBtn.className = "prcs-gap-menu-btn";
       pasteReplaceBtn.innerHTML = `Paste & Replace`;
       pasteReplaceBtn.onclick = () => {
         const newSeg = {
@@ -3026,7 +3026,7 @@ onMouseUp(e) {
     }
 
     const delBtn = document.createElement("button");
-    delBtn.className = "pr-gap-menu-btn";
+    delBtn.className = "prcs-gap-menu-btn";
     delBtn.innerHTML = `Delete`;
     delBtn.style.color = "#ff4444";
     delBtn.onclick = () => {
@@ -3050,7 +3050,7 @@ onMouseUp(e) {
   showGapContextMenu(clientX, clientY, gap) {
     this.dismissContextMenu();
     const menu = document.createElement("div");
-    menu.className = "pr-gap-menu";
+    menu.className = "prcs-gap-menu";
     menu.style.left = `${clientX + 6}px`;
     menu.style.top = `${clientY - 10}px`;
 
@@ -3058,7 +3058,7 @@ onMouseUp(e) {
 
     if (this._copiedSegment && this._copiedSegmentTrack === currentTrack) {
       const pasteBtn = document.createElement("button");
-      pasteBtn.className = "pr-gap-menu-btn";
+      pasteBtn.className = "prcs-gap-menu-btn";
       pasteBtn.innerHTML = `Paste Segment`;
       pasteBtn.onclick = () => {
         const startFrame = Math.round(gap.clickedFrame !== undefined ? gap.clickedFrame : gap.frameStart);
@@ -3081,7 +3081,7 @@ onMouseUp(e) {
 
     if (currentTrack === "image") {
       const textBtn = document.createElement("button");
-      textBtn.className = "pr-gap-menu-btn";
+      textBtn.className = "prcs-gap-menu-btn";
       textBtn.innerHTML = `${ICONS.text} Text Segment`;
       textBtn.onclick = () => {
         this.addSegmentInGap(gap.frameStart, gap.frameEnd, "text");
@@ -3090,7 +3090,7 @@ onMouseUp(e) {
       menu.appendChild(textBtn);
 
       const imgBtn = document.createElement("button");
-      imgBtn.className = "pr-gap-menu-btn";
+      imgBtn.className = "prcs-gap-menu-btn";
       imgBtn.innerHTML = `${ICONS.upload} Image Segment`;
       imgBtn.onclick = () => {
         this.dismissContextMenu();
@@ -3124,12 +3124,12 @@ onMouseUp(e) {
   showGapMenu(clientX, clientY, gap) {
     this.dismissGapMenu();
     const menu = document.createElement("div");
-    menu.className = "pr-gap-menu";
+    menu.className = "prcs-gap-menu";
     menu.style.left = `${clientX + 6}px`;
     menu.style.top = `${clientY - 10}px`;
 
     const textBtn = document.createElement("button");
-    textBtn.className = "pr-gap-menu-btn";
+    textBtn.className = "prcs-gap-menu-btn";
     textBtn.innerHTML = `${ICONS.text} Text Segment`;
     textBtn.addEventListener("click", () => {
       this.addSegmentInGap(gap.frameStart, gap.frameEnd, "text");
@@ -3137,7 +3137,7 @@ onMouseUp(e) {
     });
 
     const imgBtn = document.createElement("button");
-    imgBtn.className = "pr-gap-menu-btn";
+    imgBtn.className = "prcs-gap-menu-btn";
     imgBtn.innerHTML = `${ICONS.upload} Image Segment`;
     imgBtn.addEventListener("click", () => {
       this.dismissGapMenu();
@@ -3157,7 +3157,7 @@ onMouseUp(e) {
     const currentTrack = gap.track === "audio" ? "audio" : "image";
     if (this._copiedSegment && this._copiedSegmentTrack === currentTrack) {
       const pasteBtn = document.createElement("button");
-      pasteBtn.className = "pr-gap-menu-btn";
+      pasteBtn.className = "prcs-gap-menu-btn";
       pasteBtn.innerHTML = `Paste Segment`;
       pasteBtn.onclick = () => {
         const gapLength = gap.frameEnd - gap.frameStart;
@@ -3260,9 +3260,9 @@ onMouseUp(e) {
 
   _makeSettingRow(label, inputEl) {
     const row = document.createElement("div");
-    row.className = "pr-settings-row";
+    row.className = "prcs-settings-row";
     const lbl = document.createElement("span");
-    lbl.className = "pr-settings-label";
+    lbl.className = "prcs-settings-label";
     lbl.textContent = label;
     row.appendChild(lbl);
     row.appendChild(inputEl);
@@ -3272,10 +3272,10 @@ onMouseUp(e) {
   showSettingsMenu(anchorEl) {
     this.dismissSettingsMenu();
     const menu = document.createElement("div");
-    menu.className = "pr-settings-menu";
+    menu.className = "prcs-settings-menu";
 
     const titleContainer = document.createElement("div");
-    titleContainer.className = "pr-settings-title";
+    titleContainer.className = "prcs-settings-title";
     titleContainer.style.display = "flex";
     titleContainer.style.justifyContent = "space-between";
     titleContainer.style.alignItems = "center";
@@ -3285,7 +3285,7 @@ onMouseUp(e) {
     titleContainer.appendChild(titleText);
 
     const closeBtn = document.createElement("button");
-    closeBtn.className = "pr-settings-close-btn";
+    closeBtn.className = "prcs-settings-close-btn";
     closeBtn.innerHTML = ICONS.close;
     closeBtn.title = "Close Settings";
     closeBtn.addEventListener("click", () => this.dismissSettingsMenu());
@@ -3304,14 +3304,14 @@ onMouseUp(e) {
     const dmWidget = this.node.widgets?.find(w => w.name === "display_mode");
     if (dmWidget) {
       const ctrl = document.createElement("div");
-      ctrl.className = "pr-segmented-control";
+      ctrl.className = "prcs-segmented-control";
 
       const framesSeg = document.createElement("div");
-      framesSeg.className = "pr-segment";
+      framesSeg.className = "prcs-segment";
       framesSeg.textContent = "Frames";
 
       const secondsSeg = document.createElement("div");
-      secondsSeg.className = "pr-segment";
+      secondsSeg.className = "prcs-segment";
       secondsSeg.textContent = "Seconds";
 
       const updateActive = (val) => {
@@ -3344,27 +3344,27 @@ onMouseUp(e) {
     }
 
     const divider1 = document.createElement("hr");
-    divider1.className = "pr-settings-divider";
+    divider1.className = "prcs-settings-divider";
     menu.appendChild(divider1);
 
     const createScrubbableNumberControl = (w, step, min, max, isFloat = false) => {
       const container = document.createElement("div");
-      container.className = "pr-number-control";
+      container.className = "prcs-number-control";
 
       const decBtn = document.createElement("button");
-      decBtn.className = "pr-number-btn";
+      decBtn.className = "prcs-number-btn";
       decBtn.textContent = "-";
 
       const inp = document.createElement("input");
       inp.type = "number";
-      inp.className = "pr-settings-input";
+      inp.className = "prcs-settings-input";
       inp.value = w.value;
       inp.step = step.toString();
       inp.min = min.toString();
       inp.max = max.toString();
 
       const incBtn = document.createElement("button");
-      incBtn.className = "pr-number-btn";
+      incBtn.className = "prcs-number-btn";
       incBtn.textContent = "+";
 
       decBtn.addEventListener("click", () => {
@@ -3489,7 +3489,7 @@ onMouseUp(e) {
     }
 
     const toggleBtn = document.createElement("button");
-    toggleBtn.className = "pr-settings-toggle-btn";
+    toggleBtn.className = "prcs-settings-toggle-btn";
     const widgetsVisible = !!(this.node.widgets?.find(w => w.name === "display_mode" && !(w.options && w.options.hidden)));
     toggleBtn.textContent = widgetsVisible ? "Hide Widgets on Node" : "Show Widgets on Node";
     toggleBtn.addEventListener("click", () => {
@@ -3735,9 +3735,9 @@ onMouseUp(e) {
 
 // --- Node Registration Hooks ---
 app.registerExtension({
-  name: "LTXDirector",
+  name: "LTXDirectorCS",
   async beforeRegisterNodeDef(nodeType, nodeData, app) {
-    if (nodeData.name === "LTXDirector") {
+    if (nodeData.name === "LTXDirectorCS") {
 
       const onNodeCreated = nodeType.prototype.onNodeCreated;
       nodeType.prototype.onNodeCreated = function () {

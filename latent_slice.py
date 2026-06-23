@@ -16,7 +16,7 @@ class CleanLatentSlice:
     RETURN_TYPES = ("LATENT",)
     RETURN_NAMES = ("latent",)
     FUNCTION = "slice_latent"
-    CATEGORY = "WhatDreamsCost"
+    CATEGORY = "WhatDreamsCost CS"
     DESCRIPTION = "Safely slices a video latent starting from an offset index for a specific length. Uses torch.narrow to bypass PyTorch NestedTensor slicing bugs."
 
     def slice_latent(self, latent, start, length):
@@ -65,11 +65,11 @@ class CleanLatentSlice:
 
 # Register the node with ComfyUI
 NODE_CLASS_MAPPINGS = {
-    "CleanLatentSlice": CleanLatentSlice
+    "CleanLatentSliceCS": CleanLatentSlice
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "CleanLatentSlice": "Clean Latent Slice"
+    "CleanLatentSliceCS": "Clean Latent Slice CS"
 }
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']

@@ -1,17 +1,12 @@
 import { app } from "../../scripts/app.js";
 
-// LTX Director Guide is a pure pass-through processor node.
+// LTX Director Guide CS is a pure pass-through processor node.
 // All configuration (images, insert frames, strengths) comes from
-// the guide_data output of Prompt Relay Encode (Timeline).
-// No dynamic widgets or sync logic needed.
+// the guide_data output of the LTX Director CS (Timeline) node.
 app.registerExtension({
-    name: "Comfy.LTXDirectorGuide",
+    name: "Comfy.LTXDirectorGuideCS",
     async nodeCreated(node) {
-        if (node.comfyClass !== "LTXDirectorGuide") return;
-        // Nothing to initialize — the node has no configurable widgets.
-    },
-});
-
+        if (node.comfyClass !== "LTXDirectorGuideCS") return;
         // Nothing to initialize — the node has no configurable widgets.
     },
 });

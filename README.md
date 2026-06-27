@@ -64,7 +64,6 @@ This node uses Ollama Locally : you will need to install it (very lightweight) a
 
 - Enjoy!
 
-<img width="596" height="668" alt="Capture d&#39;écran 2026-06-13 234036" src="https://github.com/user-attachments/assets/2dfe7992-a72a-4eda-a103-41b3a8f77714" />
 
 
 # 🔄 Recent Updates

@@ -9,7 +9,7 @@ All of my nodes are created with the help of AI, so there may or may not be redu
 ## ▶️ YouTube Tutorial Videos
 
 <a href="https://youtu.be/j28z5PZXkKk?si=TPeWKm2BW-uA3BAx">
-<img width="642" height="718" alt="Capture d&#39;écran 2026-06-17 234136" src="https://github.com/user-attachments/assets/89433110-8b78-4971-8098-3a9e9226f460" />
+<img width="620" height="675" alt="Capture d&#39;écran 2026-06-27 143149" src="https://github.com/user-attachments/assets/da3ded29-8c98-4f05-8246-7b9eb72b99f2" />
 
 
 <table>
@@ -32,14 +32,13 @@ All of my nodes are created with the help of AI, so there may or may not be redu
 ## ❓ How to install nodes
 
 - Navigate to your `/ComfyUI/custom_nodes/ folder`
-- Delete your old "WhatDreamsCost-ComfyUI" Folder
-- Run `git clone -b main_cs https://github.com/CGlide/WhatDreamsCost-ComfyUI.git`
+- Run `git clone -b main_cs https://github.com/CGlide/WhatDreamsCost-CSGlide.git`
 
 
 **❗❗IMPORTANT❗❗**
 
 
-This is a Modded LTX director node with some extra options to help you create videos with references sheets
+This is a Modded LTX director node from "WhatDreamsCost" with some extra options to help you create videos with references sheets
 
 This node uses Ollama Locally : you will need to install it (very lightweight) and 
 

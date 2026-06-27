@@ -6,6 +6,8 @@ https://github.com/user-attachments/assets/68dc826f-c65f-4f1e-86cd-4f2df17bacd8
 
 # Overview
 
+Just added a couple of things from Director Node from "WhatdreamsCost" or Jonathan that I thought would be cool
+
 This will be a collection of free resources for ComfyUI.
 
 Hopefully it will make creating cool stuff easier.

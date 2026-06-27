@@ -17,8 +17,9 @@ All of my nodes are created with the help of AI, so there may or may not be redu
 ## ▶️ YouTube Tutorial Videos
 
 <a href="https://youtu.be/j28z5PZXkKk?si=TPeWKm2BW-uA3BAx">
-<img width="620" height="675" alt="Capture d&#39;écran 2026-06-27 143149" src="https://github.com/user-attachments/assets/da3ded29-8c98-4f05-8246-7b9eb72b99f2" />
-
+ <p align="center">
+  <img width="620" height="675" alt="Capture d&#39;écran 2026-06-27 143149" src="https://github.com/user-attachments/assets/da3ded29-8c98-4f05-8246-7b9eb72b99f2" />
+</p>
 
 <table>
   <tr>

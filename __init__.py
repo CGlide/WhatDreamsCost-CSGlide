@@ -1,5 +1,5 @@
 from .ltx_director import LTXDirector
-from .ltx_director_guide import LTXDirectorGuide
+from .ltx_director_guide import LTXDirectorGuide, LTXDirectorCropGuides
 from comfy_api.latest import ComfyExtension, io
 from typing_extensions import override
 from .latent_slice import CleanLatentSlice
@@ -9,7 +9,6 @@ class PromptRelay(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
         return [
             LTXDirector,
-            LTXDirectorGuide
         ]
 
 async def comfy_entrypoint() -> PromptRelay:
@@ -18,12 +17,14 @@ async def comfy_entrypoint() -> PromptRelay:
 NODE_CLASS_MAPPINGS = {
     "LTXDirectorCS": LTXDirector,
     "LTXDirectorGuideCS": LTXDirectorGuide,
+    "LTXDirectorCropGuidesCS": LTXDirectorCropGuides,
     "CleanLatentSliceCS": CleanLatentSlice,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXDirectorCS": "LTX Director CS",
     "LTXDirectorGuideCS": "LTX Director Guide CS",
+    "LTXDirectorCropGuidesCS": "LTX Director Crop Guides CS",
     "CleanLatentSliceCS": "Clean Latent Slice CS",
 }
 

@@ -1,48 +1,25 @@
 # Overview
-A Complete Timeline Editor For LTX 2.3. This is the sucessor of my previous nodes, and has loads of features in it. It was originally based off of [Kijai's Prompt Relay node](https://github.com/kijai/ComfyUI-PromptRelay) and LTX Sequencer/Multi Image Loader nodes.
-
 
 This will be a collection of free resources for ComfyUI.
 
-Hopefully it will make creating cool stuff easier.
+Hopefully it will make creating cool stuff easier!
 
-All of my nodes are created with the help of AI, so there may or may not be redundant, messy code.
+Also if you want to support this project or my channel I did make a Ko-Fi due to popular demand lol (anything helps!)
 
-**❗❗IMPORTANT❗❗**
-
-
-This is a Modded LTX director node with some extra options to help you create videos with references sheets
-
-This node uses Ollama Locally : you will need to install it (very lightweight) and 
-
-- In your Ollama model folder run this command to install qwen 3.5 2b q4 (1.9gb) "ollama run huihui_ai/qwen3.5-abliterated:2B"
-
-- The model won't eat memory while generating since there is an auto clear VRAM when you hit Run or after 5min.
-
-- You can still enter your description manually if you don't want to install it but it works very well!
-
-- Both references mode work (fixed), Licon MSR and Ghost Mask.
-
-- Use their Lora, that is an important step : https://huggingface.co/LiconStudio/LTX-2.3-Multiple-Subject-Reference/tree/main
-
-- Enjoy!
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/J5N221K0D5)
 
 ## ▶️ YouTube Tutorial Videos
-
-<a href="https://youtu.be/j28z5PZXkKk?si=TPeWKm2BW-uA3BAx">
-<img width="642" height="718" alt="Capture d&#39;écran 2026-06-17 234136" src="https://github.com/user-attachments/assets/89433110-8b78-4971-8098-3a9e9226f460" />
-
 
 <table>
   <tr>
     <td>
-      <p align="center">LTX Director Trailer</p>
-      <a href="https://www.youtube.com/watch?v=fZgtkRcu4_k">
-        <img src="https://img.youtube.com/vi/fZgtkRcu4_k/0.jpg" alt="LTX Director Trailer" width="400">
+      <p align="center">LTX Director 2.0 Trailer</p>
+      <a href="https://www.youtube.com/watch?v=o0l6Ikvn5Q0">
+        <img src="https://img.youtube.com/vi/o0l6Ikvn5Q0/0.jpg" alt="LTX Director Trailer" width="400">
       </a>
     </td>
     <td>
-      <p align="center">LTX Director Tutorial</p>
+      <p align="center">LTX Director 1.0 Tutorial</p>
       <a href="https://www.youtube.com/watch?v=vM60pJJqqEI">
         <img src="https://img.youtube.com/vi/vM60pJJqqEI/0.jpg" alt="LTX Director Tutorial" width="400">
       </a>
@@ -53,16 +30,38 @@ This node uses Ollama Locally : you will need to install it (very lightweight) a
 ## ❓ How to install nodes
 
 - Navigate to your `/ComfyUI/custom_nodes/ folder`
+- Run `git clone https://github.com/WhatDreamscost/WhatDreamsCost-ComfyUI`
+- Or download through the ComfyUI Manager.
 
-- Run `git clone -b main_cs https://github.com/CGlideWhatDreamsCost-CSGlide.git`
+**❗❗IMPORTANT❗❗**
 
-
-
-
-<img width="596" height="668" alt="Capture d&#39;écran 2026-06-13 234036" src="https://github.com/user-attachments/assets/2dfe7992-a72a-4eda-a103-41b3a8f77714" />
-
+If you don't see the latest version (v1.3.9) yet in the manager then just download the nightly version (or fetch the updates to update the list to see the latest version). 
+Also you will need to update ComfyUI-LTXVideo and ComfyUI-KJNodes to the latest version as well. You cannot use this node without updating ComfyUI-LTXVideo!
 
 # 🔄 Recent Updates
+
+**v2.0.0**
+* **Massive Update to LTX Director. I will add the full list of changes later.**
+
+  - **Complete Video Support:** Edit Videos with AI all inside the node. Videos can be extended using a combination of prompts, keyframes, and audio. Trim, Split, and combine videos all within the timeline.
+
+  - **IC-LoRA Support:** Take full advantage of IC-LoRA's to take your generations to the next level. Simply drag and drop videos onto the IC-LoRA track to quickly setup IC-LoRA videos. Compatible with prompt relay, keyframe, and custom audio features within the node.
+
+  - **Audio Inpainting:** Seamlessly blend imported audio with generated audio. Not only can audio be extended, but can also be prompted alongside your imprted audio to really bring your generations to life.
+
+  - **Retake Mode (Beta):** Redirect what happens within a shot. Allows you to select a segment within a video, and re-generate what happens in that segment. An early working experiment.
+
+  - **Timeline Saving/Loading:** You can now save your timeline and settings to a json file. It will keep any videos/audio/images you have imported into the node and every setting you have changed.
+
+  - **UI Overhaul:** Huge update to the UI, dozens of big changes such as a new side bar, redesigned prompt boxes, a bunch of new settings and redesigned menus, and more.
+
+  - **Quality of Life Improvements:** Snapping, in/out points, multi-select, mark selection, workspace folder, more HUD options, resizable prompt boxes, new hotkeys, labels, filename preview options, "split at playhead" functionality, end frames (convert any keyframe into a end/last frame), toggleable tracks, NAG Support, tons of bug fixes and more!
+
+
+**v1.3.9**
+  * **Fixed recent updates not showing in the manager**
+
+It took like 5 tries but I finally got it working 🤦‍♂️
 
 **v1.3.3**
   * **LTX Director Hotfix 2**
@@ -82,6 +81,10 @@ If anyone finds anymore bugs or has idea for improvements please let me know!
 **v1.3.1**
   * **LTX Director Example Workflow Fix**
     - Minor fix to the example workflow (i forgot to set the clip loader type to ltxv lol)
+
+
+<details>
+  <summary>Click to view older Updates</summary>
     
  **v1.3.0**
   * **New nodes: LTX Director and LTX Director Guide**
@@ -97,10 +100,7 @@ If anyone finds anymore bugs or has idea for improvements please let me know!
     - Fixed the "invisible hitbox" underneath node issue (actually this time).
 
   Also added a text output to the Speech Length Calculator node (can't believe i didn't do this initially)
-
-<details>
-  <summary>Click to view older Updates</summary>
-
+  
  **v1.2.8**
   * **Updated Load Video UI and Color Conversion**
     * Added crop mode, a simple interface to crop videos. It also include various aspect ratio presets.
@@ -154,10 +154,10 @@ Overhaul of the load audio node. Features a simple interface to easily trim audi
 # ⚙️ Custom Nodes
 
 
-## LTX Director
-<img width="1481" height="833" alt="Clipboard Image (2)" src="https://github.com/user-attachments/assets/08f3fe53-9393-4f5d-9de5-58b229fbed47" />
+## LTX Director 2.0
+<img width="1562" height="870" alt="LTX_Director_Wide" src="https://github.com/user-attachments/assets/e2f9edec-c492-443e-84de-0ad1c0db04b3" />
 
-
+A Complete Timeline Editor For LTX 2.3. This is the sucessor of my previous nodes, and has loads of features in it. It was originally based off of [Kijai's Prompt Relay node](https://github.com/kijai/ComfyUI-PromptRelay) and my LTX Sequencer/Multi Image Loader nodes.
 
 **Main Features:**
 - **Fully Functional Timeline Editor:** I spent hours studying various video editors and ended up with this design. If anyone has ideas for improvements let me know! I will adding documentation on all the functions soon.
@@ -167,11 +167,107 @@ Overhaul of the load audio node. Features a simple interface to easily trim audi
 - **Image to Video:** Part of the goal of this node was to make it easier to do everything, including Image to Video. It has built in resize functionality, and of course all the benifits of the prompt relay and custom audio integration.
 - **Text to Video:** Use text segments to create T2V videos. Compatible with all other features of the node.
 
+**LTX Director 2.0 Update Main Features**
+ - **Complete Video Support:** Edit Videos with AI all inside the node. Videos can be extended using a combination of prompts, keyframes, and audio. Trim, Split, and combine videos all within the timeline.
+
+  - **IC-LoRA Support:** Take full advantage of IC-LoRA's to take your generations to the next level. Simply drag and drop videos onto the IC-LoRA track to quickly setup IC-LoRA videos. Compatible with prompt relay, keyframe, and custom audio features within the node.
+
+  Special Thanks to https://nghtdrp.com for vibe coding the inital implementation of IC-LoRA support. 
+
+  - **Audio Inpainting:** Seamlessly blend imported audio with generated audio. Not only can audio be extended, but can also be prompted alongside your imprted audio to really bring your generations to life.
+
+  - **Retake Mode (Beta):** Redirect what happens within a shot. Allows you to select a segment within a video, and re-generate what happens in that segment. An early working experiment.
+
+  - **Timeline Saving/Loading:** You can now save your timeline and settings to a json file. It will keep any videos/audio/images you have imported into the node and every setting you have changed.
+
+  - **UI Overhaul:** Huge update to the UI, dozens of big changes such as a new side bar, redesigned prompt boxes, a bunch of new settings and redesigned menus, and more.
+
+  - **Quality of Life Improvements:** Snapping, in/out points, multi-select, mark selection, workspace folder, more HUD options, resizable prompt boxes, new hotkeys, labels, filename preview options, "split at playhead" functionality, end frames (convert any keyframe into a end/last frame), toggleable tracks, NAG Support, tons of bug fixes and more!
+
 Download workflows here: https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI/tree/main/example_workflows
 
 **Tutorial videos and documentation coming soon**
 
 
+## Multi Image Loader
+<img width="1280" height="720" alt="Multi_Image_Loader_Wide_Gif" src="https://github.com/user-attachments/assets/99b6afd8-5197-4e6c-81da-a7bd156c42c7" />
+
+An Image loader that features a built in gallery, allowing your to easily rearrange images and output them seperately or batched together. It also combines the image resize node and LTXVPreprocess node to reduce clutter in LTX workflows.
+
+## LTX Sequencer
+![LTX_Sequencer_GIF](https://github.com/user-attachments/assets/88f27155-f50e-4cb2-b937-ab173e6bdf0b)
+
+An overhaul of the LTXVAddGuideMulti node. It allows you to quickly create FFLF (First Frame Last Frame) videos, shot sequences, supports any number of middle frames.
+
+Connect the Multi Image Loader node's multi_output to automatically update the node's widgets.
+
+It also has a sync feature that syncs all LTX Sequencer nodes together in realtime, removing the need to edit every single node manually every time you want to make a change to something. 
 
 
-For those asking, I coded all of this myself (LOL). 
+## LTX Keyframer
+<img width="1082" height="608" alt="LTX Keyframer Wide" src="https://github.com/user-attachments/assets/850ba4a2-dbca-4e5a-a580-1c271e9f0c41" />
+
+An overhaul of the LTXVImgToVideoInplaceKJ node. It allows you to quickly create FFLF (First Frame Last Frame) videos and shot sequences. Also upports any number of middle frames.
+
+Connect the Multi Image Loader node's multi_output to automatically update the node's widgets.
+
+It also has a sync feature that syncs all LTX Keyframer nodes together in realtime, removing the need to edit every single node manually every time you want to make a change to something. 
+
+**I would recommend using the LTX Sequencer Node over this node, after further testing it seems superior in at pretty much everything. I'll leave it in just in case more people want to test it**
+
+## Speech Length Calculator
+<img width="1280" height="720" alt="Speech Length Calculator v2 Gif" src="https://github.com/user-attachments/assets/04b9a1cf-20e4-4b7b-a9c6-4a5a0825995b" />
+<br>
+<br>
+This node calculates in realtime how long a video should be based on the dialogue. Any words in quotations will be considered as speech. The node updates in realtime without having to run the workflow, and outputs the length depending on how fast the speech is.
+
+If you connect another string/text node to the text_input, it will still update in the length in realtime.
+
+I kept having to play the guessing game on my own generations so I made this node to make it easier :man_shrugging:
+
+## Load Video UI  
+<table width="100%">
+  <tr>
+    <td width="50%" align="center">
+      <p>Simple Controls</p>
+      <img src="https://github.com/user-attachments/assets/fb76ff03-a6ff-4837-bd63-7e429f5f3d37" width="100%" />
+    </td>
+    <td width="50%" align="center">
+      <p>New Crop Mode!</p>
+      <img src="https://github.com/user-attachments/assets/28cfb4ca-e42a-44da-9afb-f20cb01b9722" width="100%" />
+    </td>
+  </tr>
+</table>
+
+<br>
+<br>
+An upgraded Load Video node. It has the following features:
+
+* Simple interface to quickly trim videos and preview them in realtime.
+* Ability to load any length of video into the node (the default load video node was limited to 100MB files)
+* Easily switch between showing seconds and frames with a toggle button. This will change the widgets as well as the interface.
+* Multiple options for resizing the video (maintain aspect ratio, crop, stretch to fit, pad)
+* Allows dragging and dropping files into the node
+* Progress bar
+* Optimized to use less RAM (still very limited due to ComfyUI limitations, but at least a little more efficient)
+
+Please note that due to ComfyUI limitations (and the fact that this node doesn't use any addtional libraries), this node will not work well for outputting large videos. You can trim any length of video without a problem, but if the output is still large it will end up using a lot of RAM. I have implemented various optimizations though to make it use less memory.
+
+## Load Audio UI  
+<img width="1280" height="720" alt="Load_Audio_UI_V2" src="https://github.com/user-attachments/assets/e3dc5c8d-d0b9-4336-8196-944204719239" />
+<br>
+<br>
+An upgraded Load Audio node. Features a simple interface to easily trim audio. Also allows dragging and dropping files (fixes the original node that doesn't allow dropping in videos). Also compatible with nodes 2.0.
+
+# 💡 Workflows
+Download workflows here: https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI/tree/main/example_workflows
+
+# ❗ Known Issues
+
+Fixed everything so far. If there are any other issue or bugs you find please let me know!
+
+# 💡 Additional Info
+
+Feel free to suggest improvements, and if you run into any bugs let me know!
+
+For those asking, I mainly used gemini to create these nodes.

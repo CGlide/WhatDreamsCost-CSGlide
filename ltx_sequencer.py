@@ -1,4 +1,3 @@
-import json
 from comfy_extras.nodes_lt import get_noise_mask, LTXVAddGuide
 import torch
 import comfy.utils
@@ -56,14 +55,12 @@ class LTXSequencer(LTXVAddGuide):
             node_id="LTXSequencer",
             display_name="LTX Sequencer",
             category="WhatDreamsCost",
-            description="Add multiple guide images at specified frame indices or seconds. Auto-syncs to Prompt Relay invisibly via the positive wire.",
+            description="Add multiple guide images at specified frame indices or seconds with strengths. Number of widgets is dynamically configured.",
             inputs=inputs,
             outputs=[
                 io.Conditioning.Output(display_name="positive"),
                 io.Conditioning.Output(display_name="negative"),
                 io.Latent.Output(display_name="latent", tooltip="Video latent with added guides"),
-                # ---> ADDED SYNC LOG OUTPUT <---
-                io.String.Output(display_name="sync_log", tooltip="Outputs a readable text block showing the actual times used for each image"),
             ],
         )
 
@@ -92,63 +89,29 @@ class LTXSequencer(LTXVAddGuide):
         insert_mode = kwargs.get("insert_mode", "frames")
         frame_rate = kwargs.get("frame_rate", 24)
 
-        # ---> EXTRACT GHOST SYNC DATA <---
-        timeline_data = None
-        if positive is not None and len(positive) > 0:
-            if "prompt_relay_timeline" in positive[0][1]:
-                try:
-                    timeline_data = json.loads(positive[0][1]["prompt_relay_timeline"])
-                except json.JSONDecodeError:
-                    pass
-
-        # Prepare the log text
-        sync_log_lines = []
-        if timeline_data:
-            sync_log_lines.append("=== TIMELINE SYNC ENABLED ===")
-            sync_log_lines.append(f"Invisibly Synced via Positive Wire! Using {insert_mode.upper()}:")
-        else:
-            sync_log_lines.append("=== MANUAL MODE ===")
-            sync_log_lines.append(f"No timeline detected, or Sync turned OFF. Using manual UI inputs ({insert_mode}):")
-
         # Process inputs up to num_images, extracting dynamic frame/strength values from kwargs
         for i in range(1, num_images + 1):
             # Skip if this image index exceeds the batch
             if i > batch_size:
-                sync_log_lines.append(f"Image #{i}: Skipped (No image loaded in batch)")
                 continue
 
             img = multi_input[i-1:i]  # Extract the single image frame from the batch
             if img is None:
                 continue
 
+            # Calculate the final frame index based on the chosen mode
             f_idx = None
-            strength = kwargs.get(f"strength_{i}", 1.0)
-
-            # 1. AUTO-SYNC
-            if timeline_data and "starts_frames" in timeline_data and (i - 1) < len(timeline_data["starts_frames"]):
-                display_frame = timeline_data["starts_frames"][i - 1]
-                display_sec = timeline_data["starts_seconds"][i - 1]
-                
-                if insert_mode == "frames":
-                    f_idx = display_frame
-                    sync_log_lines.append(f"-> Image #{i} (Strength: {strength}): Synced to Segment #{i} start @ {display_frame} frames")
-                elif insert_mode == "seconds":
-                    f_idx = int(display_sec * frame_rate)
-                    sync_log_lines.append(f"-> Image #{i} (Strength: {strength}): Synced to Segment #{i} start @ {display_sec:.2f} seconds (Frame {f_idx})")
-                    
-            # 2. MANUAL FALLBACK
-            else:
-                if insert_mode == "frames":
-                    f_idx = kwargs.get(f"insert_frame_{i}")
-                    sync_log_lines.append(f"-> Image #{i} (Strength: {strength}): Manual input @ {f_idx} frames")
-                elif insert_mode == "seconds":
-                    sec = kwargs.get(f"insert_second_{i}")
-                    if sec is not None:
-                        f_idx = int(sec * frame_rate)
-                        sync_log_lines.append(f"-> Image #{i} (Strength: {strength}): Manual input @ {sec:.2f} seconds (Frame {f_idx})")
+            if insert_mode == "frames":
+                f_idx = kwargs.get(f"insert_frame_{i}")
+            elif insert_mode == "seconds":
+                sec = kwargs.get(f"insert_second_{i}")
+                if sec is not None:
+                    f_idx = int(sec * frame_rate)
 
             if f_idx is None:
                 continue
+                
+            strength = kwargs.get(f"strength_{i}", 1.0)
 
             # Execution logic mirrored from LTXVAddGuideMulti
             image_1, t = cls.encode(vae, latent_width, latent_height, img, scale_factors)
@@ -167,8 +130,4 @@ class LTXSequencer(LTXVAddGuide):
                 scale_factors,
             )
 
-        sync_log_str = "\n".join(sync_log_lines)
-        print(f"\n[LTX Sequencer]\n{sync_log_str}\n")
-
-        # Returned the newly formatted sync log string at the end of NodeOutput
-        return io.NodeOutput(positive, negative, {"samples": latent_image, "noise_mask": noise_mask}, sync_log_str)
+        return io.NodeOutput(positive, negative, {"samples": latent_image, "noise_mask": noise_mask})

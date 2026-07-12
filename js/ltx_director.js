@@ -646,10 +646,20 @@ const STYLES = `
   .prcs-autocomplete-item span { font-weight: bold; font-size: 12px; }
   .prcs-autocomplete-item small { color: #777; font-size: 10px; }
   .prcs-autocomplete-item.active small { color: #4fff8f; opacity: 0.8; }
-  /* --- Ref Option toolbar dropdown --- */
-  .prcs-ref-option-select { background: #1e1e1e; color: #e0e0e0; border: 1px solid #3a3a3a; border-radius: 6px; height: 28px; padding: 0 8px; font-size: 11px; font-weight: 500; cursor: pointer; outline: none; transition: all 0.15s ease; }
-  .prcs-ref-option-select:hover { border-color: #4fff8f; color: #fff; }
-  .prcs-ref-option-select:focus { border-color: #4fff8f; }
+  /* --- Custom menu-style dropdowns (ref mode / resolution / fps / units / resize) --- */
+  .prcs-msel { display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; background: #2a2a2a; color: #e6e6e6; border: 1px solid #444; border-radius: 4px; height: 24px; padding: 0 6px 0 8px; font-size: 11px; font-family: inherit; cursor: pointer; outline: none; user-select: none; transition: background 0.15s ease, border-color 0.15s ease; }
+  .prcs-msel:hover, .prcs-msel.prcs-msel-open { background: #343434; border-color: #666; }
+  .prcs-msel:focus-visible { border-color: #6a6a6a; }
+  .prcs-msel-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prcs-msel-caret { flex: 0 0 auto; display: inline-flex; color: #9a9a9a; }
+  .prcs-msel-caret svg { display: block; }
+  .prcs-msel-ic { display: inline-flex; align-items: center; }
+  .prcs-msel-menu { max-height: 60vh; overflow-y: auto; min-width: 120px; }
+  .prcs-gap-menu-btn.prcs-msel-selected { background: #383838; border-color: #555; color: #fff; }
+  /* --- Ref-mode toolbar dropdown: green-accent modifier on the menu trigger --- */
+  .prcs-ref-option-select { background: #1e1e1e; border-color: #3a3a3a; border-radius: 6px; height: 28px; font-weight: 500; }
+  .prcs-ref-option-select:hover, .prcs-ref-option-select.prcs-msel-open { background: #1e1e1e; border-color: #4fff8f; color: #fff; }
+  .prcs-ref-option-select .prcs-msel-caret { color: #cfcfcf; }
 `;
 
 let styleEl = document.getElementById("prompt-relay-styles-cs");
@@ -659,6 +669,92 @@ if (!styleEl) {
   document.head.appendChild(styleEl);
 }
 styleEl.textContent = STYLES;
+
+// --- Custom menu-style dropdown (opens a prcs-gap-menu; mimics <select> API) ---
+function createMenuSelect(options, opts) {
+  opts = opts || {};
+  const el = document.createElement("div");
+  el.className = "prcs-msel";
+  el.tabIndex = 0;
+  if (opts.width) el.style.width = opts.width;
+  const labEl = document.createElement("span");
+  labEl.className = "prcs-msel-label";
+  const carEl = document.createElement("span");
+  carEl.className = "prcs-msel-caret";
+  carEl.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+  el.appendChild(labEl);
+  el.appendChild(carEl);
+
+  let optList = options.slice();
+  let current = optList.length ? optList[0].value : "";
+  const optByVal = (v) => optList.find((o) => String(o.value) === String(v));
+  const renderLabel = () => { const o = optByVal(current); labEl.textContent = o ? o.label : (opts.placeholder || ""); };
+
+  let menuEl = null;
+  const closeMenu = () => {
+    if (!menuEl) return;
+    menuEl.remove(); menuEl = null;
+    el.classList.remove("prcs-msel-open");
+    document.removeEventListener("mousedown", onDocDown, true);
+    window.removeEventListener("resize", closeMenu, true);
+    window.removeEventListener("wheel", onWheel, true);
+  };
+  const onDocDown = (e) => { if (menuEl && !menuEl.contains(e.target) && !el.contains(e.target)) closeMenu(); };
+  const onWheel = (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); };
+  const openMenu = () => {
+    if (menuEl) { closeMenu(); return; }
+    menuEl = document.createElement("div");
+    menuEl.className = "prcs-gap-menu prcs-msel-menu";
+    optList.forEach((o) => {
+      const b = document.createElement("button");
+      b.className = "prcs-gap-menu-btn";
+      if (String(o.value) === String(current)) b.classList.add("prcs-msel-selected");
+      if (o.icon) { const ic = document.createElement("span"); ic.className = "prcs-msel-ic"; ic.innerHTML = o.icon; b.appendChild(ic); }
+      const t = document.createElement("span"); t.textContent = o.label; b.appendChild(t);
+      b.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const changed = String(current) !== String(o.value);
+        current = o.value; renderLabel(); closeMenu();
+        if (changed) el.dispatchEvent(new Event("change"));
+      });
+      menuEl.appendChild(b);
+    });
+    document.body.appendChild(menuEl);
+    el.classList.add("prcs-msel-open");
+    const r = el.getBoundingClientRect();
+    menuEl.style.position = "fixed";
+    menuEl.style.minWidth = Math.max(r.width, 120) + "px";
+    const mw = menuEl.offsetWidth;
+    let left = r.left;
+    if (left + mw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - 8 - mw);
+    menuEl.style.left = left + "px";
+    const mh = menuEl.offsetHeight;
+    let top = r.bottom + 4;
+    if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - 4 - mh);
+    menuEl.style.top = top + "px";
+    setTimeout(() => {
+      document.addEventListener("mousedown", onDocDown, true);
+      window.addEventListener("resize", closeMenu, true);
+      window.addEventListener("wheel", onWheel, true);
+    }, 0);
+  };
+  el.addEventListener("click", (e) => { e.stopPropagation(); openMenu(); });
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openMenu(); }
+    else if (e.key === "Escape") closeMenu();
+  });
+
+  Object.defineProperty(el, "value", {
+    configurable: true,
+    get() { return current; },
+    set(v) { current = v; renderLabel(); },
+  });
+  el.setMenuOptions = (newOpts) => { optList = newOpts.slice(); if (!optByVal(current) && optList.length) current = optList[0].value; renderLabel(); };
+
+  renderLabel();
+  return el;
+}
+
 
 // --- Icons ---
 const ICONS = {
@@ -2313,20 +2409,14 @@ class TimelineEditor {
     this.deleteBtn = deleteBtn;
 
     // --- Ref Option dropdown (sits to the right of Delete) ---
-    const refOptionSelect = document.createElement("select");
-    refOptionSelect.className = "prcs-ref-option-select";
-    refOptionSelect.title = "Character reference mode";
     const REF_OPTIONS = [
       { value: "Ghost Mask (End)", label: "Ghost Mask mode" },
       { value: "Licon MSR (Prefix)", label: "Licon MSR" },
       { value: "OFF", label: "OFF" },
     ];
-    REF_OPTIONS.forEach(opt => {
-      const o = document.createElement("option");
-      o.value = opt.value;
-      o.textContent = opt.label;
-      refOptionSelect.appendChild(o);
-    });
+    const refOptionSelect = createMenuSelect(REF_OPTIONS, { width: "150px" });
+    refOptionSelect.classList.add("prcs-ref-option-select");
+    refOptionSelect.title = "Character reference mode";
     refOptionSelect.value = this.timeline.reference_mode || "OFF";
     refOptionSelect.addEventListener("change", (e) => {
       this.timeline.reference_mode = e.target.value;
@@ -2790,6 +2880,9 @@ class TimelineEditor {
     if (this.node.properties.showFilenames === undefined) {
       this.node.properties.showFilenames = (this.timeline.showFilenames !== undefined) ? this.timeline.showFilenames : true;
     }
+    if (this.node.properties.showPromptZones === undefined) {
+      this.node.properties.showPromptZones = (this.timeline.showPromptZones !== undefined) ? this.timeline.showPromptZones : true;
+    }
     if (this.node.properties.overrideAudio === undefined) {
       this.node.properties.overrideAudio = (this.timeline.overrideAudio !== undefined) ? this.timeline.overrideAudio : false;
     }
@@ -3010,6 +3103,8 @@ class TimelineEditor {
         return;
       }
       if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
+        // Anchors never own a prompt — ignore any input against them.
+        if (this.timeline.segments[this.selectedIndex].isAnchor) return;
         this.timeline.segments[this.selectedIndex].prompt = this.promptInput.value;
         this.commitChanges();
       } else if (this.selectionType === "motion") {
@@ -3988,7 +4083,8 @@ class TimelineEditor {
   }
 
   // --- Async Image Upload Logic (Handles multiple images simultaneously) ---
-  async handleImageUpload(files, targetFrameStart = null, explicitLength = null) {
+  async handleImageUpload(files, targetFrameStart = null, explicitLength = null, opts = {}) {
+    const isAnchorUpload = !!opts.isAnchor;
     const frameRate = this.getFrameRate();
     const durationFrames = this.getDurationFrames();
     const newLength = explicitLength !== null ? explicitLength : frameRate * 1; // Default to 1 second long
@@ -4070,6 +4166,11 @@ class TimelineEditor {
               length: constrainedLength,
               prompt: "",
               type: "image",
+              // Image Anchor: a guide-only keyframe. It is inserted into the latent
+              // exactly like a normal image guide (same guideStrength path), but it is
+              // EXCLUDED from the prompt-relay sync — it borrows the previous segment's
+              // prompt instead of owning one. See commitChanges() and the draw block.
+              isAnchor: isAnchorUpload,
               imageFile: imageFile,
               imageB64: imgUrl
             };
@@ -5611,12 +5712,16 @@ class TimelineEditor {
       this.vidAttnValue.style.display = "none";
 
       if (seg) {
+        const isAnchorSeg = !!seg.isAnchor;
         if (this.selectionType !== "motion") {
-          this.promptInput.value = seg.prompt || "";
-          this.promptInput.placeholder = "Enter prompt for selected segment...";
+          this.promptInput.value = isAnchorSeg ? "" : (seg.prompt || "");
+          this.promptInput.placeholder = isAnchorSeg
+            ? "Image Anchor — no prompt (inherits the previous segment)"
+            : "Enter prompt for selected segment...";
         }
-        this.promptInput.disabled = false;
-        this.promptInput.style.opacity = "1.0";
+        // Anchors are guide-only, so lock their prompt field but leave Guide Strength active.
+        this.promptInput.disabled = isAnchorSeg;
+        this.promptInput.style.opacity = isAnchorSeg ? "0.5" : "1.0";
 
         const isImage = (this.selectionType === "image") && (seg.type === "image" || seg.type === "video");
         const strength = isImage ? (seg.guideStrength ?? 1.0) : 1.0;
@@ -6505,7 +6610,9 @@ class TimelineEditor {
         }
 
         if (isSelected) {
-          const outlineColor = "#fff";
+          // Image Anchors get an orange outline so they read differently from
+          // prompt-synced segments (which stay white when selected).
+          const outlineColor = seg.isAnchor ? "#ff9d2e" : "#fff";
           this.ctx.strokeStyle = outlineColor;
           this.ctx.lineWidth = 2;
           this.ctx.strokeRect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
@@ -6519,11 +6626,146 @@ class TimelineEditor {
             this.ctx.fill();
           }
         } else {
+          // Idle segments share the same black border.
           this.ctx.strokeStyle = "#000";
           this.ctx.lineWidth = 1.5;
           this.ctx.strokeRect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
         }
+
+        // Anchor glyph: drawn for anchors whether idle OR selected, so the marker
+        // stays visible on selection. Bottom-right corner, tiny dot fallback if thin.
+        if (seg.isAnchor && seg.type !== "ghost") {
+          const _anchBottom = RULER_HEIGHT + this.blockHeight;
+          if (pxWidth >= 24 && this.blockHeight > 30) {
+            const R = 9;
+            const cx = startX + pxWidth - 6 - R;
+            const cy = _anchBottom - 6 - R;
+            this.ctx.save();
+            const gs = R * 0.9;
+            this.ctx.strokeStyle = "#ffcf9b";
+            this.ctx.lineWidth = 1.2;
+            this.ctx.lineCap = "round";
+            this.ctx.beginPath();
+            this.ctx.arc(cx, cy - gs * 0.62, gs * 0.24, 0, Math.PI * 2);
+            this.ctx.stroke();
+            this.ctx.beginPath();
+            this.ctx.moveTo(cx, cy - gs * 0.4);
+            this.ctx.lineTo(cx, cy + gs * 0.72);
+            this.ctx.stroke();
+            this.ctx.beginPath();
+            this.ctx.moveTo(cx - gs * 0.5, cy - gs * 0.1);
+            this.ctx.lineTo(cx + gs * 0.5, cy - gs * 0.1);
+            this.ctx.stroke();
+            this.ctx.beginPath();
+            this.ctx.arc(cx, cy + gs * 0.05, gs * 0.62, Math.PI * 0.16, Math.PI * 0.84);
+            this.ctx.stroke();
+            this.ctx.restore();
+          } else if (pxWidth >= 6) {
+            this.ctx.save();
+            this.ctx.beginPath();
+            this.ctx.arc(startX + pxWidth / 2, _anchBottom - 7, 2.5, 0, Math.PI * 2);
+            this.ctx.fillStyle = "rgba(255, 157, 46, 0.95)";
+            this.ctx.fill();
+            this.ctx.restore();
+          }
+        }
         this.ctx.globalAlpha = 1.0;
+      }
+
+      // --- Prompt zones: boundary lines (always) + zone ribbon (toggle) ---
+      // A "zone" is the span one prompt governs. Image Anchors don't own a
+      // prompt (they inherit the preceding one), so they never open a new zone;
+      // the previous prompt's zone runs straight through them. This mirrors the
+      // prompt-relay logic used at export time, so what you see is what renders.
+      if (totalFrames > 0 && this.blockHeight > 20) {
+        const zoneSegs = sortedSegments
+          .filter(s => s.type !== "ghost")
+          .slice()
+          .sort((a, b) => a.start - b.start);
+        const realZoneSegs = zoneSegs.filter(s => !s.isAnchor);
+
+        if (realZoneSegs.length > 0) {
+          const zones = realZoneSegs.map((s, i) => ({
+            startFrame: i === 0 ? 0 : s.start,
+            endFrame: (i < realZoneSegs.length - 1) ? realZoneSegs[i + 1].start : totalFrames,
+            prompt: (s.prompt || "").trim(),
+          }));
+
+          const zf2x = (fr) => Math.floor((fr / totalFrames) * width);
+          const ZONE_FILLS = ["#1b64a8", "#0f6e56", "#9e3b1c", "#5b3a8c", "#8a6d1f", "#2f7d7a", "#7a2f5c", "#3f6d1f"];
+          const hexToRgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`; };
+          const zoneColor = (i) => { const solid = ZONE_FILLS[i % ZONE_FILLS.length]; return { solid, line: hexToRgba(solid, 0.6) }; };
+
+          const showZoneBar = !!this.node.properties.showPromptZones;
+          const ZONE_BAR_H = 18;
+          const zoneBarY = RULER_HEIGHT;
+
+          // Zone ribbon (toggle): solid full-colour pills with white labels.
+          if (showZoneBar) {
+            const GAP = 2, RAD = 5;
+            const drawPill = (x, y, w, h, r) => {
+              r = Math.min(r, h / 2, w / 2);
+              this.ctx.beginPath();
+              this.ctx.moveTo(x + r, y);
+              this.ctx.arcTo(x + w, y, x + w, y + h, r);
+              this.ctx.arcTo(x + w, y + h, x, y + h, r);
+              this.ctx.arcTo(x, y + h, x, y, r);
+              this.ctx.arcTo(x, y, x + w, y, r);
+              this.ctx.closePath();
+            };
+            this.ctx.fillStyle = "rgba(14, 16, 22, 1)";
+            this.ctx.fillRect(0, zoneBarY, width, ZONE_BAR_H);
+            for (let i = 0; i < zones.length; i++) {
+              const z = zones[i];
+              const zx0 = zf2x(z.startFrame);
+              const zx1 = zf2x(z.endFrame);
+              const px = zx0 + GAP;
+              const pillW = Math.max(0, (zx1 - GAP) - px);
+              if (pillW < 2) continue;
+              const col = zoneColor(i);
+              this.ctx.fillStyle = col.solid;
+              drawPill(px, zoneBarY, pillW, ZONE_BAR_H, RAD);
+              this.ctx.fill();
+              if (pillW > 26) {
+                this.ctx.save();
+                this.ctx.beginPath();
+                this.ctx.rect(px + 8, zoneBarY, pillW - 12, ZONE_BAR_H);
+                this.ctx.clip();
+                this.ctx.font = "bold 11px sans-serif";
+                this.ctx.textAlign = "left";
+                this.ctx.textBaseline = "middle";
+                const hasPrompt = z.prompt.length > 0;
+                this.ctx.fillStyle = hasPrompt ? "#ffffff" : "rgba(255, 255, 255, 0.6)";
+                let label = hasPrompt ? z.prompt : "(no prompt)";
+                const maxW = pillW - 16;
+                if (this.ctx.measureText(label).width > maxW) {
+                  while (label.length > 0 && this.ctx.measureText(label + "\u2026").width > maxW) {
+                    label = label.slice(0, -1);
+                  }
+                  label += "\u2026";
+                }
+                this.ctx.fillText(label, px + 8, zoneBarY + ZONE_BAR_H / 2 + 0.5);
+                this.ctx.restore();
+              }
+            }
+          }
+
+          // Boundary lines (always on): a full-height divider at each handoff,
+          // drawn last so they stay crisp over both the ribbon and the segments.
+          for (let i = 1; i < zones.length; i++) {
+            const bx = zf2x(zones[i].startFrame) + 0.5;
+            this.ctx.save();
+            this.ctx.strokeStyle = zoneColor(i).line;
+            this.ctx.lineWidth = 1.5;
+            this.ctx.setLineDash([4, 3]);
+            this.ctx.beginPath();
+            this.ctx.moveTo(bx, RULER_HEIGHT + 1);
+            this.ctx.lineTo(bx, RULER_HEIGHT + this.blockHeight - 1);
+            this.ctx.stroke();
+            this.ctx.setLineDash([]);
+            this.ctx.restore();
+          }
+        }
       }
 
       // --- Draw Motion Segments ---
@@ -6882,7 +7124,7 @@ class TimelineEditor {
     // Divider
     this.ctx.fillStyle = "#111";
     this.ctx.fillRect(0, RULER_HEIGHT - 1, width, 1);
-    this.ctx.fillRect(0, RULER_HEIGHT + this.blockHeight - 1, width, 1);
+    this.ctx.fillRect(0, RULER_HEIGHT + this.blockHeight - 1, width, 2);
     this.ctx.fillRect(0, RULER_HEIGHT + this.blockHeight + this.audioTrackHeight - 1, width, 1);
 
     // Draw gap "+" buttons
@@ -9283,6 +9525,26 @@ class TimelineEditor {
         if (seg.start >= endFrames) break;
 
         const effectiveStart = Math.max(seg.start, startFrames);
+        const clippedEnd = Math.min(seg.start + seg.length, endFrames);
+
+        // Image Anchors are guide-only: they still get inserted as a keyframe by the
+        // Python guide node (which reads them from timeline_data by type "image"), but
+        // they must NOT create their own prompt-relay segment. Absorb their timespan
+        // (and any gap before them) into the preceding prompt so it "covers" the anchor.
+        // If an anchor is the very first thing on the timeline, its span is carried
+        // forward as pendingGap into the next real prompt segment.
+        if (seg.isAnchor) {
+          const absorb = clippedEnd - currentCursor;
+          if (absorb > 0) {
+            if (contiguousLengths.length > 0) {
+              contiguousLengths[contiguousLengths.length - 1] += absorb;
+            } else {
+              pendingGap += absorb;
+            }
+          }
+          currentCursor = Math.max(currentCursor, seg.start + seg.length);
+          continue;
+        }
 
         if (effectiveStart > currentCursor) {
           const gapLength = Math.min(effectiveStart, endFrames) - currentCursor;
@@ -9293,7 +9555,6 @@ class TimelineEditor {
           }
         }
 
-        const clippedEnd = Math.min(seg.start + seg.length, endFrames);
         const clippedLength = clippedEnd - effectiveStart;
 
         contiguousLengths.push(clippedLength + pendingGap);
@@ -9315,6 +9576,7 @@ class TimelineEditor {
       propHeight: this.propHeight,
       globalPropHeight: this.globalPropHeight,
       showFilenames: !!this.node.properties.showFilenames,
+      showPromptZones: !!this.node.properties.showPromptZones,
       overrideAudio: !!this.node.properties.overrideAudio,
       inpaint_audio: !!(this.node.widgets?.find(w => w.name === "inpaint_audio")?.value),
       global_prompt: this.retakeMode ? (this.timeline.global_prompt || "") : (this.globalPromptInput ? this.globalPromptInput.value : ""),
@@ -10077,6 +10339,30 @@ class TimelineEditor {
     }
 
     // ==========================================
+    // 4b. Define Convert to / from Image Anchor (image segments only)
+    // ==========================================
+    let anchorToggleBtn = null;
+    if (trackType === "image" && seg.type === "image") {
+      anchorToggleBtn = document.createElement("button");
+      anchorToggleBtn.className = "prcs-gap-menu-btn";
+      const anchorIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9d2e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg>`;
+      anchorToggleBtn.innerHTML = seg.isAnchor
+        ? `${anchorIcon} Convert to Image Segment`
+        : `${anchorIcon} Convert to Image Anchor`;
+      anchorToggleBtn.onclick = () => {
+        seg.isAnchor = !seg.isAnchor;
+        this.commitChanges();
+        // If this segment is the one shown in the side panel, refresh it so the
+        // prompt box enables/disables and the strength row updates immediately.
+        if (this.selectedSegmentIds && this.selectedSegmentIds.includes(seg.id)) {
+          this.updateUIFromSelection();
+        }
+        this.render();
+        this.dismissContextMenu();
+      };
+    }
+
+    // ==========================================
     // 5. Define Unlink Media & Mark Selection options
     // ==========================================
     const isVidLink = trackType === "video" && seg.id.endsWith("_v");
@@ -10129,6 +10415,12 @@ class TimelineEditor {
       this.deleteSelectedSegment();
       this.dismissContextMenu();
     };
+
+    // Very top: Convert to / from Image Anchor (image segments only)
+    if (anchorToggleBtn) {
+      menu.appendChild(anchorToggleBtn);
+      menu.appendChild(makeDivider());
+    }
 
     // Very top: Split at Playhead (if active/available)
     if (splitBtn) {
@@ -10243,6 +10535,23 @@ class TimelineEditor {
         fi.click();
       };
       menu.appendChild(imgBtn);
+
+      const anchorBtn = document.createElement("button");
+      anchorBtn.className = "prcs-gap-menu-btn";
+      anchorBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9d2e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg> Image Anchor`;
+      anchorBtn.onclick = () => {
+        this.dismissContextMenu();
+        const fi = document.createElement("input");
+        fi.type = "file"; fi.accept = "image/*";
+        fi.addEventListener("change", (ev) => {
+          if (ev.target.files?.[0]) {
+            const gapLength = gap.frameEnd - gap.frameStart;
+            this.handleImageUpload([ev.target.files[0]], gap.frameStart, gapLength, { isAnchor: true });
+          }
+        });
+        fi.click();
+      };
+      menu.appendChild(anchorBtn);
 
       const pasteImageBtn = document.createElement("button");
       pasteImageBtn.className = "prcs-gap-menu-btn";
@@ -10394,8 +10703,25 @@ class TimelineEditor {
         fi.click();
       });
 
+      const anchorBtn = document.createElement("button");
+      anchorBtn.className = "prcs-gap-menu-btn";
+      anchorBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9d2e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg> Image Anchor`;
+      anchorBtn.addEventListener("click", () => {
+        this.dismissGapMenu();
+        const fi = document.createElement("input");
+        fi.type = "file"; fi.accept = "image/*";
+        fi.addEventListener("change", (ev) => {
+          if (ev.target.files?.[0]) {
+            const gapLength = gap.frameEnd - gap.frameStart;
+            this.handleImageUpload([ev.target.files[0]], gap.frameStart, gapLength, { isAnchor: true });
+          }
+        });
+        fi.click();
+      });
+
       menu.appendChild(textBtn);
       menu.appendChild(imgBtn);
+      menu.appendChild(anchorBtn);
       menu.appendChild(vidBtn);
       menu.appendChild(pasteImageBtn);
     } else if (currentTrack === "motion") {
@@ -10632,6 +10958,9 @@ class TimelineEditor {
       if (this.timeline.showFilenames !== undefined) {
         this.node.properties.showFilenames = this.timeline.showFilenames;
       }
+      if (this.timeline.showPromptZones !== undefined) {
+        this.node.properties.showPromptZones = this.timeline.showPromptZones;
+      }
       if (this.timeline.overrideAudio !== undefined) {
         this.node.properties.overrideAudio = this.timeline.overrideAudio;
       }
@@ -10677,6 +11006,7 @@ class TimelineEditor {
       this.updateRetakeUIState();
       this.updateUIFromSelection();
       this.syncWidgetsAndUI();
+      if (this.updateCharacterSlotsUI) this.updateCharacterSlotsUI();
       this.commitChanges(true); // forces sync to UI and other widgets
 
 
@@ -10733,6 +11063,7 @@ class TimelineEditor {
         audioTrackEnabled: this.audioTrackEnabled,
         motionTrackEnabled: this.motionTrackEnabled,
         showFilenames: !!this.node.properties.showFilenames,
+        showPromptZones: !!this.node.properties.showPromptZones,
         overrideAudio: !!this.node.properties.overrideAudio,
         inpaint_audio: !!(this.node.widgets?.find(w => w.name === "inpaint_audio")?.value),
         propHeight: this.propHeight,
@@ -10752,6 +11083,14 @@ class TimelineEditor {
         } : null,
         normalStartFrame: this.timeline.normalStartFrame,
         normalDurationFrames: this.timeline.normalDurationFrames,
+        reference_mode: this.timeline.reference_mode || "OFF",
+        analyzeProvider: this.timeline.analyzeProvider || "ollama",
+        analyzeBaseUrl: this.timeline.analyzeBaseUrl || "",
+        analyzeModel: this.timeline.analyzeModel || "",
+        characters: (this.timeline.characters || []).map(c => ({
+          images: (c.images || []).map(img => img.b64 ? { b64: img.b64, name: img.name } : { name: img.name }),
+          description: c.description || ""
+        })),
         segments: (this.timeline.segments || []).map(s => {
           const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
           return rest;
@@ -11001,6 +11340,45 @@ class TimelineEditor {
     showFnameCtrl.appendChild(offSeg);
 
     menu.appendChild(this._makeSettingRow("Show Filenames", showFnameCtrl));
+
+    // --- Show Prompt Zones Toggle ---
+    const showZonesCtrl = document.createElement("div");
+    showZonesCtrl.className = "prcs-segmented-control";
+
+    const zonesOffSeg = document.createElement("div");
+    zonesOffSeg.className = "prcs-segment";
+    zonesOffSeg.textContent = "Off";
+
+    const zonesOnSeg = document.createElement("div");
+    zonesOnSeg.className = "prcs-segment";
+    zonesOnSeg.textContent = "On";
+
+    const updateZonesActive = (isEnabled) => {
+      if (isEnabled) {
+        zonesOnSeg.classList.add("active");
+        zonesOffSeg.classList.remove("active");
+      } else {
+        zonesOffSeg.classList.add("active");
+        zonesOnSeg.classList.remove("active");
+      }
+    };
+
+    updateZonesActive(!!this.node.properties.showPromptZones);
+
+    const onZonesSegClick = (isEnabled) => {
+      this.node.properties.showPromptZones = isEnabled;
+      updateZonesActive(isEnabled);
+      this.render();
+      this.commitChanges(true);
+    };
+
+    zonesOffSeg.addEventListener("click", () => onZonesSegClick(false));
+    zonesOnSeg.addEventListener("click", () => onZonesSegClick(true));
+
+    showZonesCtrl.appendChild(zonesOnSeg);
+    showZonesCtrl.appendChild(zonesOffSeg);
+
+    menu.appendChild(this._makeSettingRow("Prompt Zones", showZonesCtrl));
 
     const divider2 = document.createElement("div");
     divider2.className = "prcs-settings-divider";
@@ -11803,6 +12181,7 @@ app.registerExtension({
           override_audio: false,
           overrideAudio: false,
           showFilenames: true,
+          showPromptZones: true,
           use_custom_audio: false,
           use_custom_motion: true,
           frame_rate: 24,
@@ -12000,10 +12379,11 @@ app.registerExtension({
             padding: "1px 5px", fontSize: "11px", width: (w || "86px"), boxSizing: "border-box",
             textAlign: "right", outline: "none",
           });
-          const sSel = (el, w) => Object.assign(el.style, {
-            background: "#2b2b2b", border: "1px solid #484848", borderRadius: "4px", color: "#eaeaea",
-            padding: "1px 4px", fontSize: "11px", width: (w || "126px"), boxSizing: "border-box", outline: "none",
-          });
+          const sSel = (el, w) => {
+            el.classList.add("prcs-dropdown");
+            el.style.width = (w || "126px");
+            el.style.boxSizing = "border-box";
+          };
 
           // ---------- LEFT: Resolution ----------
           const left = mkCol("Resolution");
@@ -12016,8 +12396,7 @@ app.registerExtension({
             { label: "Small \u2014 768\u00d7512", w: 768, h: 512 },
           ];
           const presetRow = mkRow("Preset");
-          const presetSel = document.createElement("select"); sSel(presetSel);
-          RES.forEach((p, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = p.label; presetSel.appendChild(o); });
+          const presetSel = createMenuSelect(RES.map((p, i) => ({ value: String(i), label: p.label })), { width: "126px" });
           presetRow.appendChild(presetSel); left.appendChild(presetRow);
 
           const widthRow = mkRow("Width");
@@ -12050,9 +12429,7 @@ app.registerExtension({
           const FPS = [24, 25, 30, 48, 60];
           const fpsRow = mkRow("Frame rate");
           const fpsWrap = document.createElement("div"); Object.assign(fpsWrap.style, { display: "flex", gap: "4px", alignItems: "center" });
-          const fpsSel = document.createElement("select"); sSel(fpsSel, "62px");
-          const oCustom = document.createElement("option"); oCustom.value = "0"; oCustom.textContent = "Custom"; fpsSel.appendChild(oCustom);
-          FPS.forEach(v => { const o = document.createElement("option"); o.value = String(v); o.textContent = v + " fps"; fpsSel.appendChild(o); });
+          const fpsSel = createMenuSelect([{ value: "0", label: "Custom" }].concat(FPS.map(v => ({ value: String(v), label: v + " fps" }))), { width: "74px" });
           const fpsIn = document.createElement("input"); fpsIn.type = "number"; fpsIn.min = "1"; sIn(fpsIn, "48px");
           const frW = getW("frame_rate"); fpsIn.value = frW ? frW.value : 24;
           const syncFps = () => { const v = parseInt(fpsIn.value) || 0; fpsSel.value = (FPS.indexOf(v) >= 0) ? String(v) : "0"; };
@@ -12118,8 +12495,7 @@ app.registerExtension({
           // ---------- RIGHT: Timing / Reference ----------
           const right = mkCol("Timing / Reference");
           const unitRow = mkRow("Units");
-          const unitSel = document.createElement("select"); sSel(unitSel, "100px");
-          [["seconds", "Seconds"], ["frames", "Frames"]].forEach(([v, l]) => { const o = document.createElement("option"); o.value = v; o.textContent = l; unitSel.appendChild(o); });
+          const unitSel = createMenuSelect([{ value: "seconds", label: "Seconds" }, { value: "frames", label: "Frames" }], { width: "100px" });
           unitSel.value = timeMode();
           unitSel.addEventListener("change", () => {
             const w = getW("display_mode");
@@ -12133,11 +12509,10 @@ app.registerExtension({
           mkTimeRow(right, "Start", "start_second", "start_frame", 0, 0);
           mkTimeRow(right, "End", "end_second", "end_frame", 0, 1);
           const rmRow = mkRow("Resize");
-          const rmSel = document.createElement("select"); sSel(rmSel);
           const rmW = getW("resize_method");
           let rmVals = (rmW && rmW.options && rmW.options.values) ? rmW.options.values : null;
           if (!rmVals || !rmVals.length) rmVals = ["stretch to fit", "maintain aspect ratio", "crop to fit"];
-          rmVals.forEach(v => { const o = document.createElement("option"); o.value = v; o.textContent = v; rmSel.appendChild(o); });
+          const rmSel = createMenuSelect(rmVals.map(v => ({ value: v, label: v })), { width: "126px" });
           if (rmW) rmSel.value = rmW.value;
           rmSel.addEventListener("change", () => setW("resize_method", rmSel.value));
           rmRow.appendChild(rmSel); right.appendChild(rmRow);
@@ -12397,6 +12772,9 @@ app.registerExtension({
             if (tl.showFilenames !== undefined) {
               this.properties.showFilenames = tl.showFilenames;
             }
+            if (tl.showPromptZones !== undefined) {
+              this.properties.showPromptZones = tl.showPromptZones;
+            }
             if (tl.overrideAudio !== undefined) {
               this.properties.overrideAudio = tl.overrideAudio;
             }
@@ -12423,6 +12801,7 @@ app.registerExtension({
             this._timelineEditor.updateRetakeUIState();
             this._timelineEditor.updateUIFromSelection();
             this._timelineEditor.syncWidgetsAndUI();
+            if (this._timelineEditor.updateCharacterSlotsUI) this._timelineEditor.updateCharacterSlotsUI();
             this._timelineEditor.syncLayoutToNode();
             this._timelineEditor.render();
           }

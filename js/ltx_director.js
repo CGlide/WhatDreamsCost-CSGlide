@@ -11018,6 +11018,13 @@ class TimelineEditor {
       this.render();
       this.dismissSettingsMenu();
 
+      // Refresh the Resolution / Timing settings panel from the freshly loaded widget
+      // values. The panel inputs are plain DOM elements that only re-read widgets when
+      // explicitly refreshed (panel build + onConfigure) - without this, loading a
+      // timeline .json updates the widgets (generation is correct) but the panel keeps
+      // displaying the previous Duration/Start/End/resolution values.
+      if (this.node._ltxSettingsRefresh) { try { this.node._ltxSettingsRefresh(); } catch (_) { } }
+
       // Trigger ComfyUI's change-detection pipeline the same way a real user
       // interaction does: by dispatching a pointerup on the canvas. This fires
       // LiteGraph's onAfterChange → ChangeTracker.captureCanvasState() →

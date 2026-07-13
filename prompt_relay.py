@@ -1,8 +1,26 @@
 import logging
 import math
+import os
 import torch
 
 log = logging.getLogger(__name__)
+
+# Debug tracing shares the CGLIDE_DEBUG switch with patches.py: OFF by default because
+# mask_fn runs inside the attention hot path (every block x step x cond/uncond) and a
+# file append there costs tens of thousands of disk writes per generation.
+_DEBUG = os.environ.get("CGLIDE_DEBUG", "") == "1"
+
+if _DEBUG:
+    def debug_log(msg):
+        try:
+            log_path = os.path.join(os.path.dirname(__file__), "debug_prompt_relay.log")
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(msg + "\n")
+        except Exception:
+            pass
+else:
+    def debug_log(msg):
+        pass
 
 
 def build_temporal_cost(q_token_idx, Lq, Lk, device, dtype, tokens_per_frame):
@@ -42,16 +60,6 @@ def build_temporal_cost_scaled(q_token_idx, Lq, Lk, device, dtype, latent_frames
     return offset
 
 
-def debug_log(msg):
-    try:
-        import os
-        log_path = os.path.join(os.path.dirname(__file__), "debug_prompt_relay.log")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
-    except Exception:
-        pass
-
-
 def create_mask_fn(q_token_idx, fallback_tokens_per_frame, latent_frames):
     """Closure: mask_fn(Lq, Lk, dtype, device, transformer_options) -> additive mask or None.
 
@@ -63,15 +71,18 @@ def create_mask_fn(q_token_idx, fallback_tokens_per_frame, latent_frames):
     max_token_idx = max(int(seg["local_token_idx"].max().item()) for seg in q_token_idx) + 1
 
     def mask_fn(Lq, Lk, dtype, device, transformer_options):
-        debug_log(f"mask_fn check: Lq={Lq} Lk={Lk} max_token_idx={max_token_idx} cond_or_uncond={transformer_options.get('cond_or_uncond', [])}")
+        if _DEBUG:
+            debug_log(f"mask_fn check: Lq={Lq} Lk={Lk} max_token_idx={max_token_idx} cond_or_uncond={transformer_options.get('cond_or_uncond', [])}")
         if Lq == Lk:
-            debug_log("mask_fn: Lq == Lk, returning None")
+            if _DEBUG:
+                debug_log("mask_fn: Lq == Lk, returning None")
             return None
 
         # Only apply on conditional pass — not unconditional (negative prompt)
         cond_or_uncond = transformer_options.get("cond_or_uncond", [])
         if 1 in cond_or_uncond and 0 not in cond_or_uncond:
-            debug_log("mask_fn: unconditional pass, returning None")
+            if _DEBUG:
+                debug_log("mask_fn: unconditional pass, returning None")
             return None
 
         grid_sizes = transformer_options.get("grid_sizes", None)
@@ -93,25 +104,32 @@ def create_mask_fn(q_token_idx, fallback_tokens_per_frame, latent_frames):
 
             # Skip cross-modal attention — text keys are padded to a fixed length ≥ max_token_idx and != video_lq
             if Lk == video_lq or Lk < max_token_idx:
-                debug_log(f"mask_fn: Lk == video_lq ({Lk == video_lq}) or Lk < max_token_idx ({Lk < max_token_idx}), returning None")
+                if _DEBUG:
+                    debug_log(f"mask_fn: Lk == video_lq ({Lk == video_lq}) or Lk < max_token_idx ({Lk < max_token_idx}), returning None")
                 return None
 
             mode = "video" if Lq == video_lq else "scaled"
 
-        key = (Lq, Lk, mode, device)
-        if key not in cache:
+        # dtype is part of the key so the cached tensor is stored ALREADY converted —
+        # the old `.to(dtype)` on return silently allocated a full mask copy on every
+        # call whenever the requested dtype differed from the build dtype.
+        key = (Lq, Lk, mode, device, dtype)
+        cached = cache.get(key)
+        if cached is None:
             if mode == "video":
                 cost = build_temporal_cost(q_token_idx, Lq, Lk, device, dtype, video_tpf)
             else:
                 cost = build_temporal_cost_scaled(q_token_idx, Lq, Lk, device, dtype, latent_frames, is_audio=is_audio)
             log.info(
-                "[PromptRelay] Built penalty matrix (%s): Lq=%d, Lk=%d, nonzero=%d/%d",
-                mode, Lq, Lk, (cost > 0).sum().item(), cost.numel(),
+                "[PromptRelay] Built penalty matrix (%s): Lq=%d, Lk=%d (%d elements)",
+                mode, Lq, Lk, cost.numel(),
             )
-            debug_log(f"Built penalty matrix ({mode}): Lq={Lq}, Lk={Lk}, key={key}")
-            cache[key] = -cost
+            if _DEBUG:
+                debug_log(f"Built penalty matrix ({mode}): Lq={Lq}, Lk={Lk}, nonzero={(cost > 0).sum().item()}/{cost.numel()}, key={key}")
+            cached = (-cost).to(dtype)
+            cache[key] = cached
 
-        return cache[key].to(dtype)
+        return cached
 
     return mask_fn
 

@@ -1,3 +1,4 @@
+import json
 import logging
 import math
 import os
@@ -184,6 +185,10 @@ def _resolve_input_video_path(video_file):
     raise FileNotFoundError(f"Could not find motion guide video: {video_file}")
 
 class ResampleGuideFrames:
+    # dtype-preserving: uint8 in -> uint8 out (nearest is a pure index_select; linear
+    # rounds back to uint8, a <=0.5/255 difference on an 8-bit source). This lets the
+    # loader keep frames as uint8 through resampling and convert to float32 only once,
+    # on the final (usually shorter) frame count.
     def execute(self, images, source_fps, target_fps, target_num_frames, mode):
         if images is None: return images
         frames = images
@@ -209,9 +214,24 @@ class ResampleGuideFrames:
         alpha = (positions - idx0.to(positions.dtype)).view(-1, 1, 1, 1)
         f0 = frames.index_select(0, idx0).to(torch.float32)
         f1 = frames.index_select(0, idx1).to(torch.float32)
-        return (f0 * (1.0 - alpha) + f1 * alpha).to(frames.dtype)
+        out = f0 * (1.0 - alpha) + f1 * alpha
+        if frames.dtype == torch.uint8:
+            out = out.round_()
+        return out.to(frames.dtype)
 
-def _load_motion_video_frames(video_file, trim_start_frames, length_frames, director_fps, resample_mode="nearest"):
+def _load_motion_video_frames(video_file, trim_start_frames, length_frames, director_fps, resample_mode="nearest", target_wh=None):
+    """Decode a trimmed window of a video into an [N, H, W, 3] float32 tensor in [0, 1].
+
+    Memory strategy (matters a lot for 1080p/4K sources):
+      1. If target_wh=(w, h) is given and the source is larger, frames are downscaled
+         DURING decode via PyAV/swscale to a size that still "covers" the target
+         (aspect preserved, both dims >= target). The exact fit (pad/crop/stretch)
+         still happens downstream in _resize_image, but from a near-target size
+         instead of full source resolution.
+      2. Frames stay uint8 through stacking and temporal resampling.
+      3. One single uint8 -> float32 conversion at the very end, on the final frame
+         count. A 10s 4K clip drops from ~6 GB of float32 to a few hundred MB.
+    """
     path = _resolve_input_video_path(video_file)
     target_fps = max(1.0, float(director_fps))
     start_s = max(0.0, float(trim_start_frames) / target_fps)
@@ -242,6 +262,10 @@ def _load_motion_video_frames(video_file, trim_start_frames, length_frames, dire
         except Exception as seek_err:
             log.warning(f"[LTXDirectorGuide] Seek failed: {seek_err}, decoding from beginning.")
 
+    # Decode-time downscale plan (computed once from the first frame's dimensions).
+    scaled_wh = None
+    scale_checked = False
+
     frames = []
     decoded_count = 0
     for frame in container.decode(stream):
@@ -255,19 +279,39 @@ def _load_motion_video_frames(video_file, trim_start_frames, length_frames, dire
 
         if t < start_s - 0.01: continue
         if end_s is not None and t >= end_s: break
-        
-        # Append raw uint8 numpy arrays to minimize CPU allocation overhead
-        frames.append(frame.to_ndarray(format="rgb24"))
+
+        if not scale_checked:
+            scale_checked = True
+            if target_wh is not None and frame.width and frame.height:
+                tw, th = int(target_wh[0]), int(target_wh[1])
+                # "Cover" scale: keep aspect, keep both dims >= target so the downstream
+                # pad/crop/stretch resize never has to upscale. Only ever downscale.
+                cover = max(tw / frame.width, th / frame.height)
+                if cover < 1.0:
+                    # swscale wants even dims for yuv sources; round up to stay >= target.
+                    sw = max(2, int(math.ceil(frame.width * cover / 2)) * 2)
+                    sh = max(2, int(math.ceil(frame.height * cover / 2)) * 2)
+                    scaled_wh = (sw, sh)
+                    log.info(f"[LTXDirectorGuide] Decode-time downscale {frame.width}x{frame.height} -> {sw}x{sh} (target {tw}x{th}).")
+
+        if scaled_wh is not None:
+            frame = frame.reformat(width=scaled_wh[0], height=scaled_wh[1], format="rgb24")
+            frames.append(frame.to_ndarray())
+        else:
+            # Append raw uint8 numpy arrays to minimize CPU allocation overhead
+            frames.append(frame.to_ndarray(format="rgb24"))
     container.close()
 
     if not frames: raise ValueError(f"No frames decoded for motion guide segment: {video_file}")
-    
-    # Convert all frames to float32 at once to optimize memory allocation
-    frames_np = np.array(frames, dtype=np.float32) / 255.0
+
+    # Stay uint8 through stacking + temporal resampling; convert to float32 once at the end.
+    frames_np = np.stack(frames)
+    del frames
     images = torch.from_numpy(frames_np)
 
     target_count = max(1, int(round(float(length_frames))))
     images = ResampleGuideFrames().execute(images, source_fps, target_fps, target_count, resample_mode)
+    images = images.to(torch.float32).div_(255.0)
     return images
 
 # --- Main Class ---
@@ -365,7 +409,6 @@ class LTXDirectorGuide:
             return cls._inject_msr(positive, negative, vae, latent_image, noise_mask, msr, model, latent_downscale_factor, msr_strength)
 
         # Parse timeline JSON to see if retake mode is active in UI
-        import json
         timeline_data_str = guide_data.get("timeline_data", "{}") if guide_data else "{}"
         try:
             tdata = json.loads(timeline_data_str)
@@ -373,7 +416,6 @@ class LTXDirectorGuide:
             tdata = {}
         
         is_retake_active = bool(retake_mode) or tdata.get("retakeMode", False)
-        is_empty_latent = (latent_image.abs().max().item() < 1e-5)
 
         # Director image guides and motion video segments
         images = guide_data.get("images", []) if guide_data else []
@@ -392,6 +434,8 @@ class LTXDirectorGuide:
         # Load single base video, encode continuously, apply temporal mask.
         # -----------------------------------------------------------------------
         if is_retake_active:
+            # Only retake mode needs this; .item() forces a GPU sync so keep it out of the normal path.
+            is_empty_latent = (latent_image.abs().max().item() < 1e-5)
             print(f"[LTXDirectorGuide] Retake Mode active. Preserving base latent, masking selected regions. is_empty_latent: {is_empty_latent}")
             target_width = latent_width * 32
             target_height = latent_height * 32
@@ -442,7 +486,8 @@ class LTXDirectorGuide:
                 try:
                     print(f"[LTXDirectorGuide] Loading and encoding base video file: {video_file} starting at frame {start_frame} for length {ltxv_length} at resolution {target_width}x{target_height}")
                     video_frames = _load_motion_video_frames(
-                        video_file, trim_start_frames=start_frame, length_frames=ltxv_length, director_fps=director_fps, resample_mode="nearest"
+                        video_file, trim_start_frames=start_frame, length_frames=ltxv_length, director_fps=director_fps, resample_mode="nearest",
+                        target_wh=(target_width, target_height),
                     )
 
                     # Retake base video must match the exact target latent shape.
@@ -462,7 +507,11 @@ class LTXDirectorGuide:
                         base_latent = vae.encode_tiled(encode_src, tile_x=tile_size, tile_y=tile_size, overlap=tile_overlap)
                     else:
                         base_latent = vae.encode(encode_src)
-                    
+
+                    # Pixel buffers are no longer needed once encoded — free them before
+                    # the sampler (and any further encodes) need the RAM/VRAM headroom.
+                    del video_frames, pixels, encode_src
+
                     base_latent = base_latent.to(device=latent_image.device, dtype=latent_image.dtype)
                     
                     # Copy to latent_image
@@ -559,7 +608,11 @@ class LTXDirectorGuide:
                         continue
 
                     start_frame_aligned = start_frame
-                    video_frames = _load_motion_video_frames(video_file, trim_start, length_frames, director_fps, seg.get("resampleMode", "nearest"))
+                    # Same pixel target _encode_video_iclora_guide will resize to — lets the
+                    # loader downscale during decode instead of holding source-res frames.
+                    _seg_tw = max(8, int(latent_width * scale_factors[1] / latent_downscale_factor))
+                    _seg_th = max(8, int(latent_height * scale_factors[2] / latent_downscale_factor))
+                    video_frames = _load_motion_video_frames(video_file, trim_start, length_frames, director_fps, seg.get("resampleMode", "nearest"), target_wh=(_seg_tw, _seg_th))
 
                     num_frames_to_keep = ((video_frames.shape[0] - 1) // time_scale_factor) * time_scale_factor + 1
                     video_frames = video_frames[:num_frames_to_keep]
@@ -567,6 +620,9 @@ class LTXDirectorGuide:
                     encode_frames = video_frames if causal_fix else torch.cat([video_frames[:1], video_frames], dim=0)
 
                     _, guide_latent = _encode_video_iclora_guide(vae, latent_width, latent_height, encode_frames, scale_factors, latent_downscale_factor, crop, use_tiled_encode, tile_size, tile_overlap, resize_method=active_resize_method)
+
+                    # Free decoded pixel frames before processing the next segment.
+                    del video_frames, encode_frames
 
                     if not causal_fix:
                         guide_latent = guide_latent[:, :, 1:, :, :]

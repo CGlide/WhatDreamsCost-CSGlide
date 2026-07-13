@@ -1,4 +1,5 @@
 import logging
+import os
 import types
 
 import comfy.ldm.modules.attention
@@ -59,6 +60,54 @@ def _wan_i2v_forward(self, mask_fn, x, context, context_img_len, transformer_opt
     return self.o(x + img_x)
 
 
+_MASK_CACHE_OFF = os.environ.get("CGLIDE_NO_MASK_CACHE", "") == "1"
+_CACHE_MISS = object()
+
+
+def _make_cached_mask_fn(mask_fn):
+    """Memoise mask_fn results so repeated cross-attn calls skip its per-call work.
+
+    NOTE: the result is NOT purely shape-dependent — mask_fn returns None on
+    unconditional passes (via transformer_options["cond_or_uncond"]) and derives the
+    token grid from transformer_options["grid_sizes"] on Wan. Both MUST be part of the
+    key: cond and uncond passes share identical shapes when run separately, and caching
+    across them would apply the relay mask to the negative pass (or drop it from the
+    positive one).
+
+    prompt_relay.create_mask_fn already caches the expensive penalty-matrix build
+    internally, so this outer layer only skips the per-call branching/lookup — cheap,
+    but it runs blocks x steps x cond/uncond times. Escape hatch: CGLIDE_NO_MASK_CACHE=1.
+    """
+    if _MASK_CACHE_OFF:
+        return mask_fn
+
+    cache = {}
+
+    def _opts_key(opts):
+        cou = opts.get("cond_or_uncond", None)
+        try:
+            cou = tuple(cou) if cou is not None else None
+        except TypeError:
+            cou = str(cou)
+        gs = opts.get("grid_sizes", None)
+        if gs is not None:
+            try:
+                gs = tuple(int(v) for v in gs)
+            except Exception:
+                gs = str(gs)
+        return (cou, gs, opts.get("promptrelay_attn_type"))
+
+    def cached(q_len, k_len, dtype, device, opts):
+        key = (q_len, k_len, dtype, device, _opts_key(opts))
+        val = cache.get(key, _CACHE_MISS)
+        if val is _CACHE_MISS:
+            val = mask_fn(q_len, k_len, dtype, device, opts)
+            cache[key] = val  # None results cached too — skips recheck-and-discard.
+        return val
+
+    return cached
+
+
 def _make_masked_override(prev_override):
     """transformer_options override that routes mask-bearing attention calls through
     attention_pytorch (sage/etc. drop arbitrary masks). Chains to a prior override
@@ -72,13 +121,21 @@ def _make_masked_override(prev_override):
     return override
 
 
-def debug_log(msg):
-    try:
-        import os
-        log_path = os.path.join(os.path.dirname(__file__), "debug_prompt_relay.log")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
-    except Exception:
+# Debug tracing is OFF by default: writing a log file inside the attention hot path
+# (every block x every step x cond/uncond) costs tens of thousands of disk writes per
+# generation. Set CGLIDE_DEBUG=1 in the environment to re-enable when diagnosing.
+_DEBUG = os.environ.get("CGLIDE_DEBUG", "") == "1"
+
+if _DEBUG:
+    def debug_log(msg):
+        try:
+            log_path = os.path.join(os.path.dirname(__file__), "debug_prompt_relay.log")
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(msg + "\n")
+        except Exception:
+            pass
+else:
+    def debug_log(msg):
         pass
 
 
@@ -91,13 +148,16 @@ def _make_ltx_mask_wrapper(underlying, mask_fn, attr):
     `underlying(x, context=..., mask=..., ...)`.
     """
     def wrapped(_self, x, context=None, mask=None, pe=None, k_pe=None, transformer_options={}):
-        debug_log(f"wrapped called: x.shape={list(x.shape)} context.shape={list(context.shape) if context is not None else None} mask_is_none={mask is None}")
+        if _DEBUG:
+            debug_log(f"wrapped called: x.shape={list(x.shape)} context.shape={list(context.shape) if context is not None else None} mask_is_none={mask is None}")
         if context is not None:
             opts = {**transformer_options, "promptrelay_attn_type": attr}
             pr_mask = mask_fn(x.shape[1], context.shape[1], x.dtype, x.device, opts)
-            debug_log(f"mask_fn returned pr_mask_is_none={pr_mask is None}")
+            if _DEBUG:
+                debug_log(f"mask_fn returned pr_mask_is_none={pr_mask is None}")
             if pr_mask is not None:
-                debug_log(f"pr_mask info: shape={list(pr_mask.shape)} min={pr_mask.min().item()} max={pr_mask.max().item()} sum={pr_mask.sum().item()}")
+                if _DEBUG:
+                    debug_log(f"pr_mask info: shape={list(pr_mask.shape)} min={pr_mask.min().item()} max={pr_mask.max().item()} sum={pr_mask.sum().item()}")
                 mask = pr_mask if mask is None else mask + pr_mask
 
         if mask is not None:
@@ -163,6 +223,10 @@ def _check_unpatched(model_clone, key):
 
 def apply_patches(model_clone, arch, mask_fn):
     diffusion_model = model_clone.get_model_object("diffusion_model")
+
+    # One shared cache for the whole model: every block requests the same mask shape,
+    # so the mask is built exactly once per generation instead of blocks x steps x 2 times.
+    mask_fn = _make_cached_mask_fn(mask_fn)
 
     if arch == "wan":
         from comfy.ldm.wan.model import WanI2VCrossAttention

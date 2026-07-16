@@ -1493,7 +1493,8 @@ class TimelineEditor {
   }
 
   // Returns the visual timeline length in frames:
-  // the furthest segment end (across both tracks) × 1.30, with a floor of getDurationFrames().
+  // max(furthest segment end across all tracks, output duration) × 1.20 — the buffer applies to
+  // BOTH so the timeline END clears ComfyUI's right-edge DOM clip even when segments are short.
   // This is used for all rendering/positioning — the actual output duration is getDurationFrames().
   getVisualDurationFrames() {
     if (this.retakeMode) {
@@ -1519,7 +1520,7 @@ class TimelineEditor {
     }
     const outputDuration = this.getDurationFrames();
     if (furthest <= 0) return outputDuration;
-    return Math.max(outputDuration, Math.ceil(furthest * 1.30));
+    return Math.ceil(Math.max(outputDuration, furthest) * 1.20);
   }
 
   // Sync the zoom slider's max attribute to the current getMaxZoom() value,
@@ -11017,13 +11018,6 @@ class TimelineEditor {
 
       this.render();
       this.dismissSettingsMenu();
-
-      // Refresh the Resolution / Timing settings panel from the freshly loaded widget
-      // values. The panel inputs are plain DOM elements that only re-read widgets when
-      // explicitly refreshed (panel build + onConfigure) - without this, loading a
-      // timeline .json updates the widgets (generation is correct) but the panel keeps
-      // displaying the previous Duration/Start/End/resolution values.
-      if (this.node._ltxSettingsRefresh) { try { this.node._ltxSettingsRefresh(); } catch (_) { } }
 
       // Trigger ComfyUI's change-detection pipeline the same way a real user
       // interaction does: by dispatching a pointerup on the canvas. This fires

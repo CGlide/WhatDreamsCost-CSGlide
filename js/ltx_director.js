@@ -1420,19 +1420,40 @@ class TimelineEditor {
     return parseInt((this.frameRateWidget && this.frameRateWidget.value > 0) ? this.frameRateWidget.value : 24, 10);
   }
 
-  // Grow the timeline duration to fit `requiredFrames` if it is currently shorter.
-  // The timeline only ever grows — never shrinks — through this method.
+  // Grow the timeline duration to fit `requiredFrames` (an ABSOLUTE frame position)
+  // if the render window currently ends before it. The timeline only ever grows —
+  // never shrinks — through this method.
   growTimelineIfNeeded(requiredFrames) {
-    const current = this.getDurationFrames();
-    if (requiredFrames <= current) return; // already big enough
+    // Compare against the window END (start + duration), not the duration alone:
+    // with Start=8s/Duration=8s, a segment ending at 15s is INSIDE the window and
+    // must not trigger growth — the old duration-only compare silently inflated
+    // the duration to the segment's absolute end position.
+    const startFrames = this.getStartFrames();
+    const currentEnd = startFrames + this.getDurationFrames();
+    if (requiredFrames <= currentEnd) return; // already big enough
 
-    const newFrames = Math.ceil(requiredFrames);
+    const newFrames = Math.max(1, Math.ceil(requiredFrames) - startFrames);
+    const rate = this.getFrameRate();
     if (this.durationFramesWidget) {
       this.durationFramesWidget.value = newFrames;
     }
     if (this.durationSecondsWidget) {
-      this.durationSecondsWidget.value = parseFloat((newFrames / this.getFrameRate()).toFixed(3));
+      this.durationSecondsWidget.value = parseFloat((newFrames / rate).toFixed(3));
     }
+    // Mirror the duration change into the End widgets (callbacks are deliberately
+    // not invoked here to avoid re-entrancy with the caller's commit, so the
+    // frames<->seconds<->end sync must be done manually).
+    if (this.endFramesWidget) {
+      this.endFramesWidget.value = startFrames + newFrames;
+    }
+    if (this.endSecondsWidget) {
+      this.endSecondsWidget.value = parseFloat(((startFrames + newFrames) / rate).toFixed(3));
+    }
+    // Refresh extent-dependent UI immediately — the silent widget write used to
+    // leave the canvas, zoom range, and settings panel stale until the user
+    // touched a timing field by hand.
+    this.updateZoomSliderMax();
+    if (this.node && this.node._ltxSettingsRefresh) { try { this.node._ltxSettingsRefresh(); } catch (_) { } }
     // Notify ComfyUI that the widget value changed so it serialises correctly.
     if (window.app && window.app.graph) {
       window.app.graph.setDirtyCanvas(true, true);
@@ -1493,8 +1514,7 @@ class TimelineEditor {
   }
 
   // Returns the visual timeline length in frames:
-  // max(furthest segment end across all tracks, output duration) × 1.20 — the buffer applies to
-  // BOTH so the timeline END clears ComfyUI's right-edge DOM clip even when segments are short.
+  // the furthest segment end (across both tracks) × 1.30, with a floor of getDurationFrames().
   // This is used for all rendering/positioning — the actual output duration is getDurationFrames().
   getVisualDurationFrames() {
     if (this.retakeMode) {
@@ -1518,9 +1538,17 @@ class TimelineEditor {
     for (const seg of this.timeline.motionSegments) {
       furthest = Math.max(furthest, seg.start + seg.length);
     }
-    const outputDuration = this.getDurationFrames();
-    if (furthest <= 0) return outputDuration;
-    return Math.ceil(Math.max(outputDuration, furthest) * 1.20);
+    // The visual extent must cover the full render WINDOW (start + duration), not
+    // just the duration: with Start=8s / End=16s the window end sits at 16s, and
+    // using duration alone capped the canvas at ~10s — making the window end
+    // unreachable by scrolling and impossible to reveal by zooming out.
+    // 15% right-side visual headroom, same as retake mode: ComfyUI clips roughly
+    // the right ~9% of the viewport, so an extent ending exactly at the window end
+    // leaves the last ~second invisible even at minimum zoom. The headroom keeps
+    // the full window (plus a bit of empty runway) on screen when zoomed out.
+    const windowEnd = Math.ceil((this.getStartFrames() + this.getDurationFrames()) * 1.15);
+    if (furthest <= 0) return windowEnd;
+    return Math.max(windowEnd, Math.ceil(furthest * 1.30));
   }
 
   // Sync the zoom slider's max attribute to the current getMaxZoom() value,
@@ -2844,11 +2872,15 @@ class TimelineEditor {
     this.viewport.className = "prcs-timeline-viewport";
 
     this.viewport.addEventListener("wheel", (e) => {
-      if (e.ctrlKey || e.metaKey) {
+      {
         e.preventDefault();
         e.stopPropagation();
 
-        let zoomDelta = e.deltaY > 0 ? -0.5 : 0.5;
+        // Plain wheel = slow zoom, Ctrl/Cmd+wheel = fast zoom. Both anchor at the
+        // cursor. preventDefault above also keeps the ComfyUI graph from zooming
+        // underneath while the cursor is over the timeline.
+        const step = (e.ctrlKey || e.metaKey) ? 0.5 : 0.15;
+        let zoomDelta = e.deltaY > 0 ? -step : step;
         this.zoomLevel = Math.max(1, Math.min(this.getMaxZoom(), this.zoomLevel + zoomDelta));
         if (this.zoomSlider) this.zoomSlider.value = this.zoomLevel;
 
@@ -2864,6 +2896,30 @@ class TimelineEditor {
         else if (window.app && window.app.graph) window.app.graph.setDirtyCanvas(true, true);
       }
     }, { passive: false, capture: true });
+
+    // Middle-mouse drag: pan the timeline horizontally (essential once the
+    // timeline is longer than the viewport). Capture-phase so it wins over the
+    // canvas segment handlers; preventDefault stops the browser's autoscroll.
+    this.viewport.addEventListener("mousedown", (e) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startScroll = this.viewport.scrollLeft;
+      const prevCursor = this.viewport.style.cursor;
+      this.viewport.style.cursor = "grabbing";
+      const onMove = (ev) => {
+        this.viewport.scrollLeft = startScroll - (ev.clientX - startX);
+      };
+      const onUp = (ev) => {
+        if (ev.button !== 1) return;
+        window.removeEventListener("mousemove", onMove, true);
+        window.removeEventListener("mouseup", onUp, true);
+        this.viewport.style.cursor = prevCursor;
+      };
+      window.addEventListener("mousemove", onMove, true);
+      window.addEventListener("mouseup", onUp, true);
+    }, { capture: true });
 
     this.canvas = document.createElement("canvas");
     this.canvas.className = "prcs-canvas";
@@ -11018,6 +11074,13 @@ class TimelineEditor {
 
       this.render();
       this.dismissSettingsMenu();
+
+      // Refresh the Resolution / Timing settings panel from the freshly loaded widget
+      // values. The panel inputs are plain DOM elements that only re-read widgets when
+      // explicitly refreshed (panel build + onConfigure) - without this, loading a
+      // timeline .json updates the widgets (generation is correct) but the panel keeps
+      // displaying the previous Duration/Start/End/resolution values.
+      if (this.node._ltxSettingsRefresh) { try { this.node._ltxSettingsRefresh(); } catch (_) { } }
 
       // Trigger ComfyUI's change-detection pipeline the same way a real user
       // interaction does: by dispatching a pointerup on the canvas. This fires

@@ -76,20 +76,20 @@ MSR_LATENT_DOWNSCALE = 1.0
 
 
 def _preprocess_prompts_with_characters(global_prompt, local_prompts, char1="", char2="", char3=""):
-    """Invisibly swaps out @character1/@char1 tags with their high-fidelity VLM descriptions."""
+    """Invisibly swaps out @ref1 (and legacy @character1/@char1) tags with their high-fidelity VLM descriptions."""
     gp = global_prompt or ""
     char1 = char1 if char1 else ""
     char2 = char2 if char2 else ""
     char3 = char3 if char3 else ""
 
     # Process Global Prompt
-    for tag in ["@character1", "@char1"]:
+    for tag in ["@character1", "@char1", "@ref1"]:
         if tag in gp:
             gp = gp.replace(tag, char1)
-    for tag in ["@character2", "@char2"]:
+    for tag in ["@character2", "@char2", "@ref2"]:
         if tag in gp:
             gp = gp.replace(tag, char2)
-    for tag in ["@character3", "@char3"]:
+    for tag in ["@character3", "@char3", "@ref3"]:
         if tag in gp:
             gp = gp.replace(tag, char3)
 
@@ -97,13 +97,13 @@ def _preprocess_prompts_with_characters(global_prompt, local_prompts, char1="", 
     locals_list = [p.strip() for p in local_prompts.split("|")] if local_prompts else []
     processed_locals = []
     for lp in locals_list:
-        for tag in ["@character1", "@char1"]:
+        for tag in ["@character1", "@char1", "@ref1"]:
             if tag in lp:
                 lp = lp.replace(tag, char1)
-        for tag in ["@character2", "@char2"]:
+        for tag in ["@character2", "@char2", "@ref2"]:
             if tag in lp:
                 lp = lp.replace(tag, char2)
-        for tag in ["@character3", "@char3"]:
+        for tag in ["@character3", "@char3", "@ref3"]:
             if tag in lp:
                 lp = lp.replace(tag, char3)
         processed_locals.append(lp)
@@ -256,8 +256,13 @@ _PROVIDER_DEFAULTS = {
 }
 
 _ANALYZE_PROMPT = (
-    "Describe the character's physical appearance in two concise sentences. "
-    "Specify their hair color/style, face details, and their clothing type/color. "
+    "Look at the image and decide whether the main subject is a person/character "
+    "or an object/prop/creature/vehicle. "
+    "If it is a character: describe their physical appearance in two concise sentences - "
+    "hair color/style, face details, and clothing type/color. "
+    "If it is an object: describe it in two concise sentences - what it is, then its "
+    "shape, color, material, and distinctive details. "
+    "Do not mention the background or setting. Do not state which category you chose. "
     "Keep the entire response very brief."
 )
 
@@ -1227,7 +1232,7 @@ class LTXDirector(io.ComfyNode):
                 ),
                 io.Image.Input(
                     "ref_images", optional=True,
-                    tooltip="Ghost Mask only. Extra reference image(s) (e.g. an object) — a single image or a batch. Appended as their own block of hidden reference frames AFTER the @char references, for any number of characters loaded (0-3). Ignored in MSR / OFF modes.",
+                    tooltip="Ghost Mask only. Extra reference image(s) (e.g. an object) — a single image or a batch. Appended as their own block of hidden reference frames AFTER the @ref references, for any number of reference slots loaded (0-3). Ignored in MSR / OFF modes.",
                 ),
                 io.Float.Input(
                     "start", force_input=True, optional=True, default=0.0,
@@ -1536,9 +1541,9 @@ class LTXDirector(io.ComfyNode):
             if vae is None:
                 raise ValueError("Licon MSR (Prefix) ref option requires connecting the VAE to LTX Director!")
 
-            # Honour @charN tags: select only the slots the prompt references; else all filled slots.
+            # Honour @refN (and legacy @charN) tags: select only the slots the prompt references; else all filled slots.
             _prompt_text = (global_prompt or "") + " " + (local_prompts or "")
-            _tag_pairs = [("@character1", "@char1"), ("@character2", "@char2"), ("@character3", "@char3")]
+            _tag_pairs = [("@character1", "@char1", "@ref1"), ("@character2", "@char2", "@ref2"), ("@character3", "@char3", "@ref3")]
             _referenced_slots = [i for i, tags in enumerate(_tag_pairs) if any(t in _prompt_text for t in tags)]
             _selected = []
             for _slot in _referenced_slots:

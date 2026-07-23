@@ -643,7 +643,7 @@ const STYLES = `
   .prcs-autocomplete-menu { position: fixed; background: #181818; border: 1px solid #444; border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; z-index: 100000; box-shadow: 0 4px 16px rgba(0,0,0,0.6); min-width: 180px; max-height: 200px; overflow-y: auto; }
   .prcs-autocomplete-item { background: #252525; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 6px 12px; font-size: 11px; font-family: monospace; cursor: pointer; text-align: left; display: flex; align-items: center; justify-content: space-between; transition: all 0.15s ease; }
   .prcs-autocomplete-item:hover, .prcs-autocomplete-item.active { background: #1c222d; color: #4fff8f; border-color: #4fff8f; }
-  .prcs-autocomplete-item span { font-weight: bold; font-size: 12px; }
+  .prcs-autocomplete-item span { font-weight: bold; font-size: 12px; color: #8fe3d6; }
   .prcs-autocomplete-item small { color: #777; font-size: 10px; }
   .prcs-autocomplete-item.active small { color: #4fff8f; opacity: 0.8; }
   /* --- Custom menu-style dropdowns (ref mode / resolution / fps / units / resize) --- */
@@ -2452,6 +2452,7 @@ class TimelineEditor {
       this.commitChanges();
     });
     this.refOptionSelect = refOptionSelect;
+
 
     actionGroup.appendChild(this.fileInput);
     actionGroup.appendChild(this.audioFileInput);
@@ -5909,6 +5910,12 @@ class TimelineEditor {
 
   // --- Rendering logic ---
   render() {
+    const msrHintEl = this.node && this.node._msrFpsHintEl;
+    if (msrHintEl) {
+      const msrActive = (this.timeline.reference_mode || "OFF").indexOf("Licon MSR") === 0;
+      const want = (msrActive && this.getFrameRate() !== 50) ? "" : "none";
+      if (msrHintEl.style.display !== want) msrHintEl.style.display = want;
+    }
     if (!this.canvas) return;
     const width = this.canvas.offsetWidth || this._lastWidth;
     const height = this.canvasHeight;
@@ -9326,7 +9333,7 @@ class TimelineEditor {
       } else {
         const label = document.createElement("div");
         label.className = "prcs-character-label";
-        label.textContent = `@char${i + 1}`;
+        label.textContent = `@ref${i + 1}`;
 
         const placeholder = document.createElement("div");
         placeholder.className = "prcs-character-placeholder";
@@ -9400,7 +9407,7 @@ class TimelineEditor {
     }
   }
 
-  // --- @char auto-complete popup (attaches to a given textarea) ---
+  // --- @ref auto-complete popup (attaches to a given textarea) ---
   setupAutocomplete(input) {
     if (!input || input._prAutocompleteAttached) return;
     input._prAutocompleteAttached = true;
@@ -9413,9 +9420,9 @@ class TimelineEditor {
     this._autocompleteMenus.push(menu);
 
     const suggestions = [
-      { tag: "@char1", label: "Character 1" },
-      { tag: "@char2", label: "Character 2" },
-      { tag: "@char3", label: "Character 3" }
+      { tag: "@ref1", label: "Reference 1" },
+      { tag: "@ref2", label: "Reference 2" },
+      { tag: "@ref3", label: "Reference 3" }
     ];
 
     let activeIndex = 0;
@@ -12463,17 +12470,86 @@ app.registerExtension({
           const presetSel = createMenuSelect(RES.map((p, i) => ({ value: String(i), label: p.label })), { width: "126px" });
           presetRow.appendChild(presetSel); left.appendChild(presetRow);
 
+          // ---- Width / Height with aspect-ratio lock ----
+          // The bracket is built from two half-pieces that sit immediately left of
+          // each input INSIDE its own row, so it tracks the input edges automatically
+          // (no hardcoded offsets to drift if field widths ever change). Each half
+          // draws a tick into its input plus a vertical line that overshoots the row
+          // by 8px, bridging the 5px column gap into one continuous line.
+          const AR_LINE = "#5a5a5a", AR_LINE_ON = "#8fe3d6";
+          const arParts = [];
+          const mkBracketPiece = (half) => {
+            const piece = document.createElement("div");
+            Object.assign(piece.style, { position: "relative", width: "20px", flexShrink: "0", alignSelf: "stretch" });
+            const vLine = document.createElement("div");
+            Object.assign(vLine.style, {
+              position: "absolute", left: "9px", width: "1px", background: AR_LINE,
+              top: half === "top" ? "50%" : "-8px",
+              bottom: half === "top" ? "-8px" : "50%",
+            });
+            const tick = document.createElement("div");
+            Object.assign(tick.style, {
+              position: "absolute", left: "9px", right: "0", top: "50%", height: "1px", background: AR_LINE,
+            });
+            piece.appendChild(vLine); piece.appendChild(tick);
+            arParts.push(vLine, tick);
+            return piece;
+          };
+
           const widthRow = mkRow("Width");
           const widthIn = document.createElement("input"); widthIn.type = "number"; widthIn.step = "32"; widthIn.min = "0"; sIn(widthIn);
-          widthRow.appendChild(widthIn); left.appendChild(widthRow);
+          const wWrap = document.createElement("div"); Object.assign(wWrap.style, { display: "flex", alignItems: "center", minWidth: "0" });
+          const pieceTop = mkBracketPiece("top");
+          wWrap.appendChild(pieceTop); wWrap.appendChild(widthIn);
+          widthRow.appendChild(wWrap); left.appendChild(widthRow);
 
           const heightRow = mkRow("Height");
           const heightIn = document.createElement("input"); heightIn.type = "number"; heightIn.step = "32"; heightIn.min = "0"; sIn(heightIn);
-          heightRow.appendChild(heightIn); left.appendChild(heightRow);
+          const hWrap = document.createElement("div"); Object.assign(hWrap.style, { display: "flex", alignItems: "center", minWidth: "0" });
+          hWrap.appendChild(mkBracketPiece("bottom")); hWrap.appendChild(heightIn);
+          heightRow.appendChild(hWrap); left.appendChild(heightRow);
+
+          // Lock button, centred on the boundary between the two rows (row gap is 5px).
+          const SVG_LOCKED = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>';
+          const SVG_UNLOCKED = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 7.6-1.7"></path></svg>';
+          const lockBtn = document.createElement("div");
+          Object.assign(lockBtn.style, {
+            position: "absolute", left: "9px", top: "calc(100% + 2.5px)", transform: "translate(-50%, -50%)",
+            cursor: "pointer", background: "#1e1e1e", padding: "1px", lineHeight: "0",
+            borderRadius: "3px", zIndex: "2", userSelect: "none",
+          });
+          pieceTop.appendChild(lockBtn);
+
+          const arGetLock = () => !!(node.properties && node.properties.lockAspect);
+          const arSnap = (v) => Math.max(32, Math.round(v / 32) * 32);
+          let arRatio = 0;
+          const arCapture = () => {
+            const w = parseInt(widthIn.value) || 0, h = parseInt(heightIn.value) || 0;
+            if (w > 0 && h > 0) arRatio = w / h;
+          };
+          const arPaint = () => {
+            const on = arGetLock();
+            lockBtn.innerHTML = on ? SVG_LOCKED : SVG_UNLOCKED;
+            lockBtn.style.color = on ? AR_LINE_ON : AR_LINE;
+            lockBtn.title = on ? "Aspect ratio locked \u2014 click to unlock" : "Lock aspect ratio";
+            for (const el of arParts) {
+              el.style.background = on ? AR_LINE_ON : AR_LINE;
+              el.style.opacity = on ? "0.85" : "0.4";
+            }
+          };
+          lockBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (!node.properties) node.properties = {};
+            node.properties.lockAspect = !arGetLock();
+            if (node.properties.lockAspect) arCapture();
+            arPaint();
+          });
 
           const wW = getW("custom_width"), hW = getW("custom_height");
           widthIn.value = wW ? wW.value : 768;
           heightIn.value = hW ? hW.value : 512;
+          arCapture();
+          arPaint();
 
           const syncPreset = () => {
             const cw = parseInt(widthIn.value) || 0, ch = parseInt(heightIn.value) || 0;
@@ -12485,12 +12561,30 @@ app.registerExtension({
             if (p && p.w > 0) {
               widthIn.value = p.w; heightIn.value = p.h;
               setW("custom_width", p.w); setW("custom_height", p.h);
+              arCapture(); // a preset defines a new aspect — lock follows it
             }
           });
-          widthIn.addEventListener("change", () => { let v = Math.round(parseFloat(widthIn.value)); if (isNaN(v) || v < 0) v = 0; widthIn.value = v; setW("custom_width", v); syncPreset(); });
-          heightIn.addEventListener("change", () => { let v = Math.round(parseFloat(heightIn.value)); if (isNaN(v) || v < 0) v = 0; heightIn.value = v; setW("custom_height", v); syncPreset(); });
+          widthIn.addEventListener("change", () => {
+            let v = Math.round(parseFloat(widthIn.value)); if (isNaN(v) || v < 0) v = 0;
+            widthIn.value = v; setW("custom_width", v);
+            // Derived side is snapped to /32 so the locked pair stays a valid latent size.
+            if (arGetLock() && arRatio > 0 && v > 0) {
+              const h = arSnap(v / arRatio);
+              heightIn.value = h; setW("custom_height", h);
+            }
+            syncPreset();
+          });
+          heightIn.addEventListener("change", () => {
+            let v = Math.round(parseFloat(heightIn.value)); if (isNaN(v) || v < 0) v = 0;
+            heightIn.value = v; setW("custom_height", v);
+            if (arGetLock() && arRatio > 0 && v > 0) {
+              const w = arSnap(v * arRatio);
+              widthIn.value = w; setW("custom_width", w);
+            }
+            syncPreset();
+          });
 
-          const FPS = [24, 25, 30, 48, 60];
+          const FPS = [24, 25, 30, 48, 50, 60];
           const fpsRow = mkRow("Frame rate");
           const fpsWrap = document.createElement("div"); Object.assign(fpsWrap.style, { display: "flex", gap: "4px", alignItems: "center" });
           const fpsSel = createMenuSelect([{ value: "0", label: "Custom" }].concat(FPS.map(v => ({ value: String(v), label: v + " fps" }))), { width: "74px" });
@@ -12500,6 +12594,28 @@ app.registerExtension({
           fpsSel.addEventListener("change", () => { const v = parseInt(fpsSel.value) || 0; if (v > 0) { fpsIn.value = v; applyFrameRate(v); } });
           fpsIn.addEventListener("change", () => { let v = Math.round(parseFloat(fpsIn.value)); if (isNaN(v) || v < 1) v = 1; fpsIn.value = v; applyFrameRate(v); syncFps(); });
           fpsWrap.appendChild(fpsSel); fpsWrap.appendChild(fpsIn);
+          fpsWrap.style.flexShrink = "0";
+          // MSR fps hint: Licon MSR's IC-LoRA is trained at 50 fps; other rates give
+          // double/jittery motion. Lives in the flexible gap between the row label
+          // and the fps controls so it never moves the layout - it just ellipsis-
+          // crops when the node gets narrow. Visibility is kept current by render().
+          const msrHint = document.createElement("span");
+          msrHint.textContent = "\u26a0 MSR 50 recommended";
+          msrHint.title = "Licon MSR is trained at 50 fps \u2014 other frame rates can cause double/jittery motion. Click to set 50 fps.";
+          Object.assign(msrHint.style, {
+            display: "none", color: "#e6b455", fontSize: "10px", cursor: "pointer",
+            flex: "1 1 auto", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis",
+            whiteSpace: "nowrap", textAlign: "right", userSelect: "none",
+          });
+          msrHint.addEventListener("click", () => { fpsIn.value = 50; applyFrameRate(50); syncFps(); });
+          node._msrFpsHintEl = msrHint;
+          // Initial state (render() takes over afterwards).
+          try {
+            const ed = node._timelineEditor;
+            const msrOn = ed && (ed.timeline.reference_mode || "OFF").indexOf("Licon MSR") === 0;
+            if (msrOn && (parseInt(fpsIn.value) || 0) !== 50) msrHint.style.display = "";
+          } catch (_) { }
+          fpsRow.appendChild(msrHint);
           fpsRow.appendChild(fpsWrap); left.appendChild(fpsRow);
 
           syncPreset(); syncFps();

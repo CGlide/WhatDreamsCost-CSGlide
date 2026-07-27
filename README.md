@@ -50,6 +50,18 @@ Honestly I use OFF more than I expected. It's more predictable graphically — y
 
 Your global prompt box height is remembered, by the way. Toggle back to ON and it goes back to how you had it.
 
+### Image Anchor (Prompt Relay ON)
+
+Ok so originally an image and a prompt were welded together. One image, one prompt, both starting at the same moment — that was the deal. But under the hood those were always two separate systems, they just came as a pair.
+
+Anchors unweld them. Right-click an image segment → **Convert to Image Anchor**, and now that image can sit anywhere on the timeline and it just borrows whatever prompt is already running at that point. The prompt box for it goes grey and locked and tells you why: *Image Anchor — no prompt (inherits the previous segment)*. Guide Strength still works, so you can dial how hard the image pushes on the shot.
+
+And here's the bit that confuses people — the length of an anchor means nothing. It's a single pinned keyframe at its start position, that's it. The width you see on screen is just a grab handle so you can pick it up and drag it around. Stretch it wide, squash it small, changes nothing.
+
+Turn on Prompt Zones and you can actually see how it works. Anchors — the ones with the little yellow anchor icon — sit *inside* a zone instead of cutting it in half. So you can drop three anchors inside one prompt zone and they all ride the same prompt. That's the whole point of them.
+
+Right-click again to turn it back into a normal image segment. And the yellow marking only shows with relay ON — with relay OFF every image is guide-only anyway, so the node doesn't bother drawing it.
+
 ### Prompt Zones + zone dots
 
 Turn on Prompt Zones and you get the coloured ribbon on the timeline showing where each prompt applies.

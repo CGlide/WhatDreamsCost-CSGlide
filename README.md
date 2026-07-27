@@ -7,37 +7,11 @@ https://github.com/user-attachments/assets/68dc826f-c65f-4f1e-86cd-4f2df17bacd8
 
 # Overview
 
-Just added a couple of things from Director Node from "WhatdreamsCost" or Jonathan that I thought would be cool
-
-This will be a collection of free resources for ComfyUI.
-
-Hopefully it will make creating cool stuff easier.
-
-All of my nodes are created with the help of AI, so there may or may not be redundant, messy code.
+Director CS Node is a Modded version from "WhatdreamsCost"
 
 ## ▶️ YouTube Tutorial Videos
 
-<a href="https://youtu.be/j28z5PZXkKk?si=TPeWKm2BW-uA3BAx">
- <p align="center">
-  <img width="620" height="675" alt="Capture d&#39;écran 2026-06-27 143149" src="https://github.com/user-attachments/assets/da3ded29-8c98-4f05-8246-7b9eb72b99f2" />
-</p>
 
-<table>
-  <tr>
-    <td>
-      <p align="center">LTX Director Trailer</p>
-      <a href="https://www.youtube.com/watch?v=fZgtkRcu4_k">
-        <img src="https://img.youtube.com/vi/fZgtkRcu4_k/0.jpg" alt="LTX Director Trailer" width="400">
-      </a>
-    </td>
-    <td>
-      <p align="center">LTX Director Tutorial</p>
-      <a href="https://www.youtube.com/watch?v=vM60pJJqqEI">
-        <img src="https://img.youtube.com/vi/vM60pJJqqEI/0.jpg" alt="LTX Director Tutorial" width="400">
-      </a>
-    </td>
-  </tr>
-</table>
 
 ## ❓ How to install nodes
 
@@ -45,94 +19,91 @@ All of my nodes are created with the help of AI, so there may or may not be redu
 - Run `git clone -b main_cs https://github.com/CGlide/WhatDreamsCost-CSGlide.git`
 
 
-**❗❗IMPORTANT❗❗**
+## What's new in 0.23
 
+### MSR Prefix
 
-This is a Modded LTX director node from "WhatDreamsCost" with some extra options to help you create videos with references sheets
+New dropdown in the settings menu. `17 / 25 / 33 / 41 / 49 / 57 / 65`, default is 41.
 
-This node uses Ollama Locally : you will need to install it (very lightweight) and 
+This is the length of the reference runway — the little slideshow of your reference images that runs before the actual video, so the model has time to look at them and lock the identity. Longer runway, stronger lock.
 
-- In your Ollama model folder run this command to install qwen 3.5 2b q4 (1.9gb) "ollama run huihui_ai/qwen3.5-abliterated:2B"
+And to be clear because I got this wrong myself at first: this has nothing to do with how many references you use. You still get 3 `@ref` slots, always. It's a bigger stage, not a bigger cast.
 
-- The model won't eat memory while generating since there is an auto clear VRAM when you hit Run or after 5min.
+**Careful:** 49 and up only work with Licon MSR **V2**. V1 was not trained on those lengths. And the longer you go, the more memory it eats — if you're already close to OOM on a long generation, don't push this to 65 and expect miracles.
 
-- You can still enter your description manually if you don't want to install it but it works very well!
+### Prompt Relay ON / OFF
 
-- Both references mode work (fixed), Licon MSR and Ghost Mask.
+The Prompt Relay toggle now actually changes the whole UI, not just the backend.
 
-- Use their Lora, that is an important step : https://huggingface.co/LiconStudio/LTX-2.3-Multiple-Subject-Reference/tree/main
+**Relay ON** — what you had before. One prompt per segment, each one lands on its own moment in the timeline. Best when you want fine control over what happens and when.
 
-- Enjoy!
+**Relay OFF (guide mode)** — the segment prompt box disappears completely and the Global Prompt box grows to fill the space. Now you write one prompt for the whole thing and your images do the driving. The label even changes to *Global Prompt (IC-LoRA)* so you know where you are.
 
+Honestly I use OFF more than I expected. It's more predictable graphically — you're not fighting three prompts pulling the shot in different directions. Some people will tell you it's faster too, and technically yes, but the sampler is basically all of your generation time so don't switch for that. Switch because the result is cleaner.
 
+Your global prompt box height is remembered, by the way. Toggle back to ON and it goes back to how you had it.
 
-# 🔄 Recent Updates
+### Prompt Zones + zone dots
 
-**v1.3.3**
-  * **LTX Director Hotfix 2**
-    - Fixed duration_seconds input issue.
-    - Made both duration widgets visible at all times now
-    - Implemented audio latent fix to improve compatibility
+Turn on Prompt Zones and you get the coloured ribbon on the timeline showing where each prompt applies.
 
+New in this one: little coloured dots right after the **SEGMENT PROMPT** label, one per zone, same colours as the ribbon. Click a dot and it jumps to that segment and loads its prompt. The selected one gets a white outline so you can see where you are.
 
-**v1.3.2**
-  * **LTX Director Hotfix**
-    - Fixed epsilon input overlapping custom_width input
-    - Fixed invisible widgets in nodes 2.0 when toggling widget visibility through settings menu
+Small thing. I use it constantly now. Only shows up when Prompt Zones is ON and relay is ON, because otherwise there are no zones to point at.
 
-If anyone finds anymore bugs or has idea for improvements please let me know! 
+### Convert to Text Segment
 
+Right-click an image segment → **Convert to Text Segment**. It drops the image but **keeps your prompt**.
 
-**v1.3.1**
-  * **LTX Director Example Workflow Fix**
-    - Minor fix to the example workflow (i forgot to set the clip loader type to ltxv lol)
-    
+Before this I was deleting the segment and retyping the prompt like an idiot. Sits right under *Convert to Image Anchor* in the menu.
 
+### @ref works for anything now
 
-## LTX Director
-<img width="1481" height="833" alt="Clipboard Image (2)" src="https://github.com/user-attachments/assets/08f3fe53-9393-4f5d-9de5-58b229fbed47" />
+The tags used to be `@char1 / @char2 / @char3` and the describer assumed everything was a person. So if you loaded a car it would try to tell you about its hair.
 
+Now it's `@ref1 / @ref2 / @ref3` and the analyze prompt figures out on its own whether it's looking at a character or an object — vehicle, prop, creature, whatever — and describes it the right way. Reference sheets of a jeep work exactly like reference sheets of a person.
 
+Old `@char1` and `@character1` still work. I didn't break your old timelines.
 
-**Main Features:**
-- **Fully Functional Timeline Editor:** I spent hours studying various video editors and ended up with this design. If anyone has ideas for improvements let me know! I will adding documentation on all the functions soon.
-- **Prompt Relay integrated:** This unlocks the ability to have granular control over video generation. For more information on Prompt Relay go here, https://gordonchen19.github.io/Prompt-Relay/
-- **First, Middle, Last Frame Support:** This has by far the easiest method of creating first/last frames videos. It supports any number of keyframes, and will be the successor of my previous nodes.
-- **Custom Audio Support:** Import, trim, and combine your own audio clips in this node. Enabling custom audio is as simple as clicking 1 button. It is also compatible with every other feature in the node, include first/last frames, t2v, i2v, and prompt relay.
-- **Image to Video:** Part of the goal of this node was to make it easier to do everything, including Image to Video. It has built in resize functionality, and of course all the benifits of the prompt relay and custom audio integration.
-- **Text to Video:** Use text segments to create T2V videos. Compatible with all other features of the node.
+### 50 fps and the MSR warning
 
-Download workflows here: https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI/tree/main/example_workflows
+50 fps is in the frame rate presets now. And when MSR is on and you're **not** at 50, a small orange **⚠ MSR 50 recommended** appears next to the frame rate. Click it and it sets 50 for you.
 
-**Tutorial videos and documentation coming soon**
+Licon MSR is trained at 50. I tried 48 thinking it's close enough — the motion goes doubled and jittery. It's not close enough. Use 50.
 
+### Timeline handling
 
+- Aspect ratio lock between width and height. Change one, the other follows.
+- Middle mouse to drag the timeline around, and to zoom.
+- New resolution presets.
 
+---
 
-<br>
-<br>
-An upgraded Load Video node. It has the following features:
+## Settings menu reference
 
-* Simple interface to quickly trim videos and preview them in realtime.
-* Ability to load any length of video into the node (the default load video node was limited to 100MB files)
-* Easily switch between showing seconds and frames with a toggle button. This will change the widgets as well as the interface.
-* Multiple options for resizing the video (maintain aspect ratio, crop, stretch to fit, pad)
-* Allows dragging and dropping files into the node
-* Progress bar
-* Optimized to use less RAM (still very limited due to ComfyUI limitations, but at least a little more efficient)
+Click the gear on the node.
 
-Please note that due to ComfyUI limitations (and the fact that this node doesn't use any addtional libraries), this node will not work well for outputting large videos. You can trim any length of video without a problem, but if the output is still large it will end up using a lot of RAM. I have implemented various optimizations though to make it use less memory.
+| Setting | What it does |
+| --- | --- |
+| **Save / Save As / Load Timeline** | Timelines are files. Save the good ones. |
+| **Hide / Show Widgets** | Collapses the raw node widgets when you're working from the timeline UI. |
+| **Prompt Relay** | ON = one prompt per segment. OFF = global prompt only, images act as guides. |
+| **MSR Prefix** | Reference runway length. 17–65 frames, default 41. 49+ needs MSR V2. |
+| **Display Mode** | Frames or Seconds on the ruler. |
+| **Show Filenames** | Filename overlay on image segments. |
+| **Prompt Zones** | The coloured prompt ribbon and the zone dots. |
+| **Epsilon** | How sharply a prompt is confined to its segment. Lower = tighter. Leave it alone unless you know why you're touching it. |
+| **Divisible By** | Rounds your resolution so the model doesn't complain. |
+| **Img Compression** | Compression on the images you load in. |
+| **Workspace Folder** | Opens the folder where timelines and assets live. |
+| **Provider / Base URL / Model** | The backend that writes your reference descriptions when you hit Analyze. |
 
+---
 
+## Careful with this
 
+**ComfyUI Manager "Update All" does a hard reset.** If you edited any file in this folder, it's gone. No warning. Happened to me. Commit or back up first.
 
+**Don't press "Sync fork" on GitHub** if you forked this. It pulls the original repo over the top of yours. I did that once and it deleted a pull request I had open. 🤦
 
-# ❗ Known Issues
-
-Fixed everything so far. If there are any other issue or bugs you find please let me know!
-
-# 💡 Additional Info
-
-I made these nodes knowing little about python and a beginner level understanding of javascript. Feel free to suggest improvements, and if you run into any bugs let me know.
-
-For those asking, I mainly used gemini to create these nodes.
+**MSR is not the everyday tool.** Ghost Mask is what I reach for most of the time — the motion is more natural. MSR is the specialist: when you need the face or the object to match your reference image exactly, that's when you switch. Don't leave it on for everything.

@@ -671,6 +671,36 @@ if (!styleEl) {
 styleEl.textContent = STYLES;
 
 // --- Custom menu-style dropdown (opens a prcs-gap-menu; mimics <select> API) ---
+// Wheel over the node's DOM panels does nothing by default: the browser sees a plain
+// div, and ComfyUI's canvas never receives the event, so the graph will not zoom unless
+// the cursor is off the node entirely. Forward it to the canvas so those areas behave
+// like the rest of the graph. Two exceptions are handled: anything genuinely scrollable
+// (a long prompt box) keeps its own scrolling until it hits the end, and the timeline
+// viewport is untouched because its own capture-phase handler stops propagation first.
+function _ltxForwardWheelToGraph(rootEl) {
+  if (!rootEl || rootEl._ltxWheelBound) return;
+  rootEl._ltxWheelBound = true;
+  rootEl.addEventListener("wheel", (e) => {
+    for (let n = e.target; n && n !== rootEl.parentElement; n = n.parentElement) {
+      if (n.scrollHeight > n.clientHeight + 1) {
+        const atTop = n.scrollTop <= 0;
+        const atBottom = n.scrollTop + n.clientHeight >= n.scrollHeight - 1;
+        const wantsUp = e.deltaY < 0;
+        if (!((wantsUp && atTop) || (!wantsUp && atBottom))) return;
+      }
+    }
+    const cv = app && app.canvas && app.canvas.canvas;
+    if (!cv) return;
+    e.preventDefault();
+    e.stopPropagation();
+    cv.dispatchEvent(new WheelEvent("wheel", {
+      deltaX: e.deltaX, deltaY: e.deltaY, deltaZ: e.deltaZ, deltaMode: e.deltaMode,
+      clientX: e.clientX, clientY: e.clientY,
+      bubbles: true, cancelable: true,
+    }));
+  }, { passive: false });
+}
+
 function createMenuSelect(options, opts) {
   opts = opts || {};
   const el = document.createElement("div");
@@ -13086,6 +13116,7 @@ app.registerExtension({
         };
         const settingsContainer = document.createElement("div");
         settingsContainer.style.boxSizing = "border-box";
+        _ltxForwardWheelToGraph(settingsContainer);
         _ltxBuildSettingsPanel(this, settingsContainer);
         const settingsWidget = this.addDOMWidget("ltx_settings_ui", "ltx_settings_ui", settingsContainer, {
           getValue: () => "",
@@ -13101,6 +13132,7 @@ app.registerExtension({
         const container = document.createElement("div");
 
         container.style.boxSizing = "border-box";
+        _ltxForwardWheelToGraph(container);
         const widget = this.addDOMWidget("timeline_ui", "timeline_ui", container, {
           getValue: () => "",
           setValue: () => { },

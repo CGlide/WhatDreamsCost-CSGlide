@@ -3,6 +3,7 @@ from .ltx_director_guide import LTXDirectorGuide, LTXDirectorCropGuides
 from comfy_api.latest import ComfyExtension, io
 from typing_extensions import override
 from .latent_slice import CleanLatentSlice
+from .ltx_chunk_writer import LTXChunkWriter, LTXChunkAssembler
 
 class PromptRelay(ComfyExtension):
     @override
@@ -19,6 +20,8 @@ NODE_CLASS_MAPPINGS = {
     "LTXDirectorGuideCS": LTXDirectorGuide,
     "LTXDirectorCropGuidesCS": LTXDirectorCropGuides,
     "CleanLatentSliceCS": CleanLatentSlice,
+    "LTXChunkWriterCS": LTXChunkWriter,
+    "LTXChunkAssemblerCS": LTXChunkAssembler,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -26,6 +29,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LTXDirectorGuideCS": "LTX Director Guide CS",
     "LTXDirectorCropGuidesCS": "LTX Director Crop Guides CS",
     "CleanLatentSliceCS": "Clean Latent Slice CS",
+    "LTXChunkWriterCS": "LTX Chunk Writer CS",
+    "LTXChunkAssemblerCS": "LTX Chunk Assembler CS",
 }
 
 WEB_DIRECTORY = "./js"

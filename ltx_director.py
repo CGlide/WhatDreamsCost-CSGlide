@@ -695,6 +695,41 @@ def _load_image_tensor(seg: dict) -> torch.Tensor:
     except:
         return torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
+def _load_image_sequence_tensor(seg: dict) -> torch.Tensor:
+    """Load a segment's `imageFiles` list into a SINGLE [N, H, W, 3] float32 tensor.
+
+    Used by the chunked long-video handoff. Handing LTX N separate one-frame guides is
+    not the same as one N-frame guide: the VAE is temporal (8 pixel frames per latent
+    frame), so single-frame guides encode as N static latents that all fight over the
+    same latent slot, and no motion is carried across the seam. Stacking them here means
+    the VAE sees an actual sequence — the same path a video segment already takes, but
+    from lossless PNGs instead of a re-decoded h264 clip.
+    """
+    files = seg.get("imageFiles") or []
+    frames = []
+    base = folder_paths.get_input_directory()
+
+    for rel in files:
+        file_path = os.path.join(base, str(rel))
+        if not os.path.exists(file_path):
+            log.warning("[LTXDirector] Handoff frame missing: %s", file_path)
+            continue
+        try:
+            img = Image.open(file_path).convert("RGB")
+            frames.append(np.array(img, dtype=np.float32) / 255.0)
+        except Exception as e:
+            log.warning("[LTXDirector] Could not read handoff frame %s: %s", file_path, e)
+
+    if not frames:
+        return _load_image_tensor(seg)
+
+    # Mismatched sizes would break the stack; fall back to the first frame's shape.
+    h, w = frames[0].shape[0], frames[0].shape[1]
+    frames = [f for f in frames if f.shape[0] == h and f.shape[1] == w]
+
+    log.info("[LTXDirector] Image sequence guide: %d frame(s) stacked into one guide.", len(frames))
+    return torch.from_numpy(np.stack(frames, axis=0))
+
 def _load_video_tensor(seg: dict, frame_rate: float) -> torch.Tensor:
     """Extracts a sequence of frames from a video file based on the segment's trim parameters,
     and returns them as an [N, H, W, 3] float32 tensor."""
@@ -1408,6 +1443,8 @@ class LTXDirector(io.ComfyNode):
                         seg["trimStart"] = float(seg.get("trimStart", 0)) + offset
                         seg["length"] = max(1, int(seg.get("length", 1)) - offset)
                     tensor = _load_video_tensor(seg, float(frame_rate))
+                elif seg.get("imageFiles"):
+                    tensor = _load_image_sequence_tensor(seg)
                 else:
                     tensor = _load_image_tensor(seg)
 
@@ -1435,8 +1472,10 @@ class LTXDirector(io.ComfyNode):
                     tensor = _resize_image(tensor, src_w, src_h, "maintain aspect ratio", divisible_by)
 
 
-                # Apply compression
-                if img_compression > 0:
+                # Apply compression. Skipped for the chunk handoff strip: those frames are
+                # the previous chunk's own output and must stay pixel-exact, and _compress_image
+                # round-trips through h264/yuv420p which shifts levels.
+                if img_compression > 0 and not seg.get("isHandoff"):
                     tensor = _compress_image(tensor, img_compression)
 
                 # Record dimensions of the first processed image for latent generation

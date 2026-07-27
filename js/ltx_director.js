@@ -838,6 +838,8 @@ function parseInitial(jsonStr) {
       if (p.reference_mode !== undefined) parsed.reference_mode = p.reference_mode;
       if (p.disable_prompt_relay !== undefined) parsed.disable_prompt_relay = p.disable_prompt_relay;
       if (p.msr_prefix_frames !== undefined) parsed.msr_prefix_frames = p.msr_prefix_frames;
+      if (p.chunk_total_seconds !== undefined) parsed.chunk_total_seconds = p.chunk_total_seconds;
+      if (p.chunk_seconds !== undefined) parsed.chunk_seconds = p.chunk_seconds;
       if (p.analyzeProvider !== undefined) parsed.analyzeProvider = p.analyzeProvider;
       if (p.analyzeBaseUrl !== undefined) parsed.analyzeBaseUrl = p.analyzeBaseUrl;
       if (p.analyzeModel !== undefined) parsed.analyzeModel = p.analyzeModel;
@@ -11471,6 +11473,197 @@ class TimelineEditor {
     }
   }
 
+  // --- Chunked long-video handoff -------------------------------------------
+  // Places a strip of handoff frames (written by LTX Chunk Writer CS into
+  // input/ltx_director_handoff/) as consecutive one-frame image ANCHORS starting
+  // at frame 0. Done programmatically because MIN_SEGMENT_LENGTH makes it
+  // impossible to drag blocks this small. Anchors are correct here: these frames
+  // carry motion into the new chunk, they must not own prompts.
+  async placeHandoffFrames(files) {
+    if (!Array.isArray(files) || !files.length) return 0;
+
+    // Drop any previous strip so re-placing never stacks duplicates.
+    this.timeline.segments = (this.timeline.segments || []).filter(s => !s.isHandoff);
+
+    // Land the strip at the START of the current render window, not at absolute
+    // frame 0 — chunk 2+ renders a later window, and Python drops any segment
+    // that ends before start_frame.
+    const hoBase = Math.max(0, this.getStartFrames() || 0);
+
+    // ONE image at the window start. Testing showed a single frame beats
+    // a multi-frame stack: it is exactly what the working "drop the whole video in"
+    // method produces, since Python trims a video segment down to the single frame at
+    // start_frame. Placed programmatically because the segment has to begin exactly at
+    // the window start, where the physics engine will not let you drag it.
+    // FIRST handoff frame, not the last: the window is set to start `handoff_frames`
+    // before the previous chunk ended, so both chunks cover that span and it can be
+    // cross-dissolved at assembly. h00 is the frame at (prev_end - N), i.e. exactly
+    // where the new window begins.
+    const rel = String(files[0]);
+    const fparts = rel.split("/");
+    const ffilename = fparts.pop();
+    const fsubfolder = fparts.join("/");
+    const firstUrl = api.apiURL(`/view?filename=${encodeURIComponent(ffilename)}&type=input&subfolder=${encodeURIComponent(fsubfolder)}`);
+
+    const seg = {
+      id: Date.now().toString() + "_ho_" + Math.random().toString(36).substr(2, 5),
+      start: hoBase,
+      // Only `start` is ever read by the Python guide loop; length is just a grab handle.
+      // 6 = MIN_SEGMENT_LENGTH, so the block stays visible and selectable.
+      length: 6,
+      prompt: "",
+      type: "image",
+      isAnchor: true,
+      isHandoff: true,
+      imageFile: rel,
+      imageB64: firstUrl,
+    };
+
+    this.timeline.segments.push(seg);
+
+    await new Promise((res) => {
+      const img = new Image();
+      img.onload = () => { seg.imgObj = img; res(); };
+      img.onerror = () => res();
+      img.src = firstUrl;
+    });
+    this.timeline.segments.sort((a, b) => a.start - b.start);
+    if (this.selectedIndex >= this.timeline.segments.length) this.selectedIndex = -1;
+    this.render();
+    this.commitChanges(true);
+    return files.length;
+  }
+
+  clearHandoffFrames() {
+    const before = (this.timeline.segments || []).length;
+    this.timeline.segments = (this.timeline.segments || []).filter(s => !s.isHandoff);
+    if (this.selectedIndex >= this.timeline.segments.length) this.selectedIndex = -1;
+    this.render();
+    this.commitChanges(true);
+    return before - this.timeline.segments.length;
+  }
+
+  // --- Automatic chunked render -------------------------------------------
+  // Sets the render window directly on all six widgets rather than going through the
+  // seconds<->frames sync callbacks, which guard against re-entry and are not safe to
+  // drive programmatically.
+  _setWindowFrames(startF, endF) {
+    const fps = parseFloat(this.frameRateWidget?.value) || 25;
+    const s = Math.max(0, Math.round(startF));
+    const e = Math.max(s + 1, Math.round(endF));
+    if (this.startFramesWidget) this.startFramesWidget.value = s;
+    if (this.endFramesWidget) this.endFramesWidget.value = e;
+    if (this.durationFramesWidget) this.durationFramesWidget.value = e - s;
+    if (this.startSecondsWidget) this.startSecondsWidget.value = +(s / fps).toFixed(2);
+    if (this.endSecondsWidget) this.endSecondsWidget.value = +(e / fps).toFixed(2);
+    if (this.durationSecondsWidget) this.durationSecondsWidget.value = +((e - s) / fps).toFixed(2);
+    this.node.setDirtyCanvas(true, true);
+  }
+
+  _findChunkWriter() {
+    const nodes = (app.graph && (app.graph._nodes || app.graph.nodes)) || [];
+    return nodes.find(n => n.comfyClass === "LTXChunkWriterCS" || n.type === "LTXChunkWriterCS");
+  }
+
+  // Resolves when the queued prompt finishes, rejects if it errors.
+  _queueAndWait() {
+    return new Promise((resolve, reject) => {
+      const done = () => { cleanup(); setTimeout(resolve, 250); };
+      const failed = (ev) => { cleanup(); reject(new Error("ComfyUI reported an execution error")); };
+      const cleanup = () => {
+        api.removeEventListener("execution_success", done);
+        api.removeEventListener("execution_error", failed);
+        api.removeEventListener("execution_interrupted", failed);
+      };
+      api.addEventListener("execution_success", done);
+      api.addEventListener("execution_error", failed);
+      api.addEventListener("execution_interrupted", failed);
+      try {
+        app.queuePrompt(0, 1);
+      } catch (err) {
+        cleanup();
+        reject(err);
+      }
+    });
+  }
+
+  async runChunkedRender(totalSeconds, chunkSeconds, setStatus) {
+    const say = (msg) => { console.log("[LTXChunkRun]", msg); if (setStatus) setStatus(msg); };
+
+    const writer = this._findChunkWriter();
+    if (!writer) { say("No 'LTX Chunk Writer CS' node in this workflow - add one first."); return; }
+    const wget = (name) => (writer.widgets || []).find(w => w.name === name);
+
+    const fps = parseFloat(this.frameRateWidget?.value) || 25;
+    const overlap = Math.max(0, parseInt(wget("handoff_frames")?.value) || 0);
+    const totalFrames = Math.max(1, Math.round(totalSeconds * fps));
+    const chunkFrames = Math.max(overlap + 8, Math.round(chunkSeconds * fps));
+
+    const windows = [];
+    let s = 0;
+    let guard = 0;
+    while (s < totalFrames && guard++ < 500) {
+      const e = Math.min(s + chunkFrames, totalFrames);
+      windows.push([s, e]);
+      if (e >= totalFrames) break;
+      s = e - overlap;
+    }
+    // A tiny trailing window wastes a whole render on a fraction of a second and adds
+    // a seam for nothing. Under half a chunk, fold it into its predecessor.
+    if (windows.length > 1) {
+      const last = windows[windows.length - 1];
+      if (last[1] - last[0] < chunkFrames * 0.5) {
+        windows.pop();
+        windows[windows.length - 1][1] = totalFrames;
+      }
+    }
+    if (!windows.length) { say("Nothing to render - check the total length."); return; }
+
+    if (wget("total_chunks")) wget("total_chunks").value = windows.length;
+    // Keep the assembled video in sync with the timeline rather than the node default.
+    if (wget("video_fps")) wget("video_fps").value = fps;
+    say(`${windows.length} chunk(s), ${chunkFrames} frames each, ${overlap} frame overlap.`);
+
+    for (let i = 0; i < windows.length; i++) {
+      const [ws, we] = windows[i];
+      say(`Chunk ${i + 1} of ${windows.length} - frames ${ws} to ${we} ...`);
+
+      this._setWindowFrames(ws, we);
+      if (wget("chunk_index")) wget("chunk_index").value = i + 1;
+
+      if (i === 0) {
+        this.clearHandoffFrames();
+      } else {
+        const prevTag = "chunk_" + String(i).padStart(3, "0");
+        let sets = [];
+        try {
+          const r = await api.fetchApi("/ltx_director/handoff_sets");
+          sets = (await r.json()).sets || [];
+        } catch (err) {
+          say("Could not read handoff frames: " + err.message);
+          return;
+        }
+        const set = sets.find(x => x.chunk === prevTag);
+        if (!set || !set.files || !set.files.length) {
+          say(`No handoff frames found for ${prevTag} - stopping. Is the Chunk Writer wired to the decoded images?`);
+          return;
+        }
+        await this.placeHandoffFrames(set.files);
+      }
+
+      this.commitChanges(true);
+
+      try {
+        await this._queueAndWait();
+      } catch (err) {
+        say(`Chunk ${i + 1} failed: ${err.message}. Earlier chunks are still on disk.`);
+        return;
+      }
+    }
+
+    say(`Done - ${windows.length} chunks rendered. Assembled sequence is in the run's final/ folder.`);
+  }
+
   _makeSettingRow(label, inputEl) {
     const row = document.createElement("div");
     row.className = "prcs-settings-row";
@@ -11663,6 +11856,140 @@ class TimelineEditor {
     });
     msrRow.appendChild(msrLabelWrap); msrRow.appendChild(msrSel);
     menu.appendChild(msrRow);
+
+    // --- Continue From: place a chunk handoff strip at frame 0 ----------------
+    const hoRow = document.createElement("div");
+    Object.assign(hoRow.style, {
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      gap: "16px", padding: "4px 2px 8px", flexWrap: "nowrap",
+    });
+    const hoLabelWrap = document.createElement("div");
+    Object.assign(hoLabelWrap.style, { display: "flex", flexDirection: "column", gap: "1px", minWidth: "0", flex: "1 1 auto" });
+    const hoLabel = document.createElement("span");
+    hoLabel.textContent = "Continue From";
+    Object.assign(hoLabel.style, { fontSize: "12px", fontWeight: "600", color: "#dcdcdc", whiteSpace: "nowrap" });
+    const hoSub = document.createElement("span");
+    hoSub.textContent = "Handoff frames as anchors at frame 0";
+    Object.assign(hoSub.style, { fontSize: "10px", color: "#8a8a8a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+    hoLabelWrap.appendChild(hoLabel); hoLabelWrap.appendChild(hoSub);
+
+    const hoCtrls = document.createElement("div");
+    Object.assign(hoCtrls.style, { display: "flex", alignItems: "center", gap: "6px", flexShrink: "0" });
+    const hoSelRef = { el: createMenuSelect([{ value: "", label: "Loading..." }], { width: "150px" }) };
+    hoSelRef.el.style.flexShrink = "0";
+    const hoPlace = document.createElement("button");
+    hoPlace.className = "prcs-settings-toggle-btn";
+    hoPlace.textContent = "Place";
+    const hoClear = document.createElement("button");
+    hoClear.className = "prcs-settings-toggle-btn";
+    hoClear.textContent = "Clear";
+    hoCtrls.appendChild(hoSelRef.el); hoCtrls.appendChild(hoPlace); hoCtrls.appendChild(hoClear);
+    hoRow.appendChild(hoLabelWrap); hoRow.appendChild(hoCtrls);
+    menu.appendChild(hoRow);
+
+    let _hoSets = [];
+    api.fetchApi("/ltx_director/handoff_sets")
+      .then(r => r.json())
+      .then(d => {
+        _hoSets = (d && d.sets) || [];
+        const opts = _hoSets.length
+          ? _hoSets.map((s, i) => ({ value: String(i), label: `${s.run} / ${s.chunk} (${s.count})` }))
+          : [{ value: "", label: "None found" }];
+        const fresh = createMenuSelect(opts, { width: "150px" });
+        fresh.style.flexShrink = "0";
+        if (hoSelRef.el.parentNode === hoCtrls) hoCtrls.replaceChild(fresh, hoSelRef.el);
+        hoSelRef.el = fresh;
+      })
+      .catch(err => console.error("[PromptRelay] handoff_sets fetch failed", err));
+
+    hoPlace.addEventListener("click", async () => {
+      const set = _hoSets[parseInt(hoSelRef.el.value)];
+      if (!set || !set.files || !set.files.length) return;
+      hoPlace.disabled = true;
+      try {
+        await this.placeHandoffFrames(set.files);
+      } catch (err) {
+        console.error("[PromptRelay] placeHandoffFrames failed", err);
+      } finally {
+        hoPlace.disabled = false;
+      }
+    });
+
+    hoClear.addEventListener("click", () => this.clearHandoffFrames());
+
+    // --- Auto Chunk Render ---------------------------------------------------
+    const acRow = document.createElement("div");
+    Object.assign(acRow.style, {
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      gap: "16px", padding: "4px 2px 2px", flexWrap: "nowrap",
+    });
+    const acLabelWrap = document.createElement("div");
+    Object.assign(acLabelWrap.style, { display: "flex", flexDirection: "column", gap: "1px", minWidth: "0", flex: "1 1 auto" });
+    const acLabel = document.createElement("span");
+    acLabel.textContent = "Auto Chunk Render";
+    Object.assign(acLabel.style, { fontSize: "12px", fontWeight: "600", color: "#dcdcdc", whiteSpace: "nowrap" });
+    const acSub = document.createElement("span");
+    acSub.textContent = "Total / chunk length in seconds";
+    Object.assign(acSub.style, { fontSize: "10px", color: "#8a8a8a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+    acLabelWrap.appendChild(acLabel); acLabelWrap.appendChild(acSub);
+
+    const acCtrls = document.createElement("div");
+    Object.assign(acCtrls.style, { display: "flex", alignItems: "center", gap: "6px", flexShrink: "0" });
+    const mkNum = (val, w) => {
+      const el = document.createElement("input");
+      el.type = "number"; el.min = "1"; el.step = "1"; el.value = String(val);
+      Object.assign(el.style, {
+        width: w, background: "#2a2a2a", border: "1px solid #444", color: "#e0e0e0",
+        borderRadius: "4px", padding: "3px 6px", fontSize: "12px", textAlign: "right",
+      });
+      return el;
+    };
+    const acTotal = mkNum(this.timeline.chunk_total_seconds || 24, "58px");
+    const acChunk = mkNum(this.timeline.chunk_seconds || 8, "50px");
+    // Persist on edit - these used to reset every time the menu closed.
+    acTotal.addEventListener("change", () => {
+      this.timeline.chunk_total_seconds = parseFloat(acTotal.value) || 24;
+      this.commitChanges(true);
+    });
+    acChunk.addEventListener("change", () => {
+      this.timeline.chunk_seconds = parseFloat(acChunk.value) || 8;
+      this.commitChanges(true);
+    });
+    const acGo = document.createElement("button");
+    acGo.className = "prcs-settings-toggle-btn";
+    acGo.textContent = "Render All";
+    acCtrls.appendChild(acTotal); acCtrls.appendChild(acChunk); acCtrls.appendChild(acGo);
+    acRow.appendChild(acLabelWrap); acRow.appendChild(acCtrls);
+    menu.appendChild(acRow);
+
+    const acStatus = document.createElement("div");
+    acStatus.textContent = "Idle.";
+    Object.assign(acStatus.style, {
+      fontSize: "10px", color: "#8a8a8a", padding: "0 2px 8px",
+      whiteSpace: "normal", lineHeight: "1.35",
+    });
+    menu.appendChild(acStatus);
+
+    acGo.addEventListener("click", async () => {
+      const total = parseFloat(acTotal.value) || 0;
+      const chunk = parseFloat(acChunk.value) || 0;
+      if (total <= 0 || chunk <= 0) { acStatus.textContent = "Set a total and a chunk length first."; return; }
+      this.timeline.chunk_total_seconds = total;
+      this.timeline.chunk_seconds = chunk;
+      this.commitChanges(true);
+      acGo.disabled = true;
+      acGo.textContent = "Running...";
+      try {
+        await this.runChunkedRender(total, chunk, (m) => { acStatus.textContent = m; });
+      } catch (err) {
+        console.error("[LTXChunkRun] failed", err);
+        acStatus.textContent = "Failed: " + err.message;
+      } finally {
+        acGo.disabled = false;
+        acGo.textContent = "Render All";
+      }
+    });
+
 
     const div2b = document.createElement("hr");
     div2b.className = "prcs-settings-divider";

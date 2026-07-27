@@ -75,38 +75,33 @@ MSR_PREFIX_FRAMES = 41
 MSR_LATENT_DOWNSCALE = 1.0
 
 
-def _preprocess_prompts_with_characters(global_prompt, local_prompts, char1="", char2="", char3=""):
-    """Invisibly swaps out @ref1 (and legacy @character1/@char1) tags with their high-fidelity VLM descriptions."""
+def _preprocess_prompts_with_characters(global_prompt, local_prompts, char1="", char2="", char3="", skip_empty=False):
+    """Invisibly swaps out @ref1 (and legacy @character1/@char1) tags with their slot descriptions.
+
+    skip_empty=True leaves a tag untouched when its slot description is empty. Licon MSR
+    uses this so an unfilled slot behaves exactly as it did before short labels existed,
+    instead of silently deleting the tag from the prompt.
+    """
     gp = global_prompt or ""
-    char1 = char1 if char1 else ""
-    char2 = char2 if char2 else ""
-    char3 = char3 if char3 else ""
+    _vals = [char1 or "", char2 or "", char3 or ""]
+    _tag_sets = [
+        ["@character1", "@char1", "@ref1"],
+        ["@character2", "@char2", "@ref2"],
+        ["@character3", "@char3", "@ref3"],
+    ]
 
-    # Process Global Prompt
-    for tag in ["@character1", "@char1", "@ref1"]:
-        if tag in gp:
-            gp = gp.replace(tag, char1)
-    for tag in ["@character2", "@char2", "@ref2"]:
-        if tag in gp:
-            gp = gp.replace(tag, char2)
-    for tag in ["@character3", "@char3", "@ref3"]:
-        if tag in gp:
-            gp = gp.replace(tag, char3)
+    def _sub(text):
+        for tags, val in zip(_tag_sets, _vals):
+            if skip_empty and not val:
+                continue
+            for tag in tags:
+                if tag in text:
+                    text = text.replace(tag, val)
+        return text
 
-    # Process Local Timeline Prompts
+    gp = _sub(gp)
     locals_list = [p.strip() for p in local_prompts.split("|")] if local_prompts else []
-    processed_locals = []
-    for lp in locals_list:
-        for tag in ["@character1", "@char1", "@ref1"]:
-            if tag in lp:
-                lp = lp.replace(tag, char1)
-        for tag in ["@character2", "@char2", "@ref2"]:
-            if tag in lp:
-                lp = lp.replace(tag, char2)
-        for tag in ["@character3", "@char3", "@ref3"]:
-            if tag in lp:
-                lp = lp.replace(tag, char3)
-        processed_locals.append(lp)
+    processed_locals = [_sub(lp) for lp in locals_list]
 
     return gp, " | ".join(processed_locals)
 
@@ -276,6 +271,17 @@ def _resolve_provider(data):
 
 
 # --- Character reference analysis endpoint (Ollama / LM Studio / Custom OpenAI-compatible) ---
+# Licon MSR wants a short anchor phrase, not a full description: the reference image
+# carries identity, and a long description competes with it.
+_ANALYZE_PROMPT_SHORT = (
+    "Look at the image and identify the main subject. "
+    "Reply with ONE short noun phrase of 3 to 5 words naming it plus its single most "
+    "distinctive visual trait. Examples: man in yellow jacket / black custom harley "
+    "motorcycle / woman with neon visor. "
+    "Do not write a sentence, do not add punctuation, quotes or any explanation."
+)
+
+
 @PromptServer.instance.routes.post("/ltx_director/analyze_character")
 async def analyze_character_endpoint(request):
     try:
@@ -284,6 +290,8 @@ async def analyze_character_endpoint(request):
         image_b64 = data.get("image_b64", "")
         char_index = int(data.get("char_index", 0))
         provider, base_url, model_name = _resolve_provider(data)
+        # "short" is sent by the UI while Licon MSR is the active reference mode.
+        analyze_prompt = _ANALYZE_PROMPT_SHORT if data.get("short") else _ANALYZE_PROMPT
 
         if provider == "off":
             return web.json_response({"status": "error", "message": "Analyze is set to Off / Manual."})
@@ -312,7 +320,7 @@ async def analyze_character_endpoint(request):
             async with aiohttp.ClientSession() as session:
                 if provider == "ollama":
                     payload = {
-                        "model": model_name, "prompt": _ANALYZE_PROMPT,
+                        "model": model_name, "prompt": analyze_prompt,
                         "images": cleaned_b64_list, "stream": False, "keep_alive": 0,
                     }
                     async with session.post(f"{base_url}/api/generate", json=payload, timeout=120) as response:
@@ -323,7 +331,7 @@ async def analyze_character_endpoint(request):
                         generated_text = (resp_json.get("response") or "").strip()
                 else:
                     # OpenAI-compatible vision chat (LM Studio / Custom).
-                    content = [{"type": "text", "text": _ANALYZE_PROMPT}]
+                    content = [{"type": "text", "text": analyze_prompt}]
                     for b64 in cleaned_b64_list:
                         content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
                     payload = {
@@ -1042,7 +1050,18 @@ def _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames):
     return result
 
 
-def _encode_relay(model, clip, latent, global_prompt, local_prompts, segment_lengths, epsilon):
+def _encode_relay(model, clip, latent, global_prompt, local_prompts, segment_lengths, epsilon, disable_relay=False):
+    # disable_relay: skip all temporal masking. Encode the global prompt once and hand back
+    # an UNPATCHED model clone - no segment chunking, no mask_fn, no attention wrapping. The
+    # whole clip is driven by the global prompt (image guides / anchors still work, since
+    # those live in the guide node, not here). Faster, and the intended path for timelines
+    # that only place images at times with no per-segment prompts.
+    if disable_relay:
+        gp = global_prompt if (global_prompt and global_prompt.strip()) else "video"
+        log.info("[PromptRelay] DISABLED - global-prompt-only encode, attention left unpatched.")
+        conditioning = clip.encode_from_tokens_scheduled(clip.tokenize(gp))
+        return model.clone(), conditioning
+
     for name, val in (("global_prompt", global_prompt),
                       ("local_prompts", local_prompts),
                       ("segment_lengths", segment_lengths)):
@@ -1311,6 +1330,7 @@ class LTXDirector(io.ComfyNode):
         # --- Reference option (set by the toolbar "Ref Option" dropdown, stored in timeline JSON) ---
         # One of: "Ghost Mask (End)", "Licon MSR (Prefix)", "OFF".
         reference_mode = tdata.get("reference_mode", "OFF")
+        disable_relay = bool(tdata.get("disable_prompt_relay", False))
 
         # --- Load character reference slots from the timeline JSON ---
         # characters = [{ "images": [{"b64":..., "name":...}], "description": "..." }, ...]
@@ -1347,12 +1367,19 @@ class LTXDirector(io.ComfyNode):
         # Ghost Mask / OFF: swap @char tags for their VLM descriptions in the prompt text.
         # Licon MSR: leave the tags raw — there the reference IMAGE drives identity, and the
         #            tags are used only to pick which character slots feed the slideshow.
-        if reference_mode == "Licon MSR (Prefix)":
-            ref_global, ref_local = global_prompt, local_prompts
-        else:
-            ref_global, ref_local = _preprocess_prompts_with_characters(
-                global_prompt, local_prompts, char1_val, char2_val, char3_val
-            )
+        # The MSR slot scan further down looks for @refN tags to pick which sheets feed
+        # the slideshow - substitution removes them, so capture the raw text first.
+        _raw_tag_text = (global_prompt or "") + " " + (
+            local_prompts if isinstance(local_prompts, str) else " ".join(local_prompts or [])
+        )
+        # Ghost Mask / OFF: swap tags for the full VLM description.
+        # Licon MSR: swap for the slot's SHORT label so the encoder reads clean text
+        #            instead of a literal "@ref1" token; identity still comes from the
+        #            reference image. Empty slot -> tag left as-is (pre-existing behaviour).
+        ref_global, ref_local = _preprocess_prompts_with_characters(
+            global_prompt, local_prompts, char1_val, char2_val, char3_val,
+            skip_empty=(reference_mode == "Licon MSR (Prefix)"),
+        )
         global_prompt, local_prompts = ref_global, ref_local
 
         # --- Build guide_data from image segments FIRST (to derive output dimensions) ---
@@ -1542,7 +1569,7 @@ class LTXDirector(io.ComfyNode):
                 raise ValueError("Licon MSR (Prefix) ref option requires connecting the VAE to LTX Director!")
 
             # Honour @refN (and legacy @charN) tags: select only the slots the prompt references; else all filled slots.
-            _prompt_text = (global_prompt or "") + " " + (local_prompts or "")
+            _prompt_text = _raw_tag_text
             _tag_pairs = [("@character1", "@char1", "@ref1"), ("@character2", "@char2", "@ref2"), ("@character3", "@char3", "@ref3")]
             _referenced_slots = [i for i, tags in enumerate(_tag_pairs) if any(t in _prompt_text for t in tags)]
             _selected = []
@@ -1577,7 +1604,13 @@ class LTXDirector(io.ComfyNode):
             slideshow_video = torch.stack(slideshow_tensors)
 
             keyframe_images = slideshow_sources
-            prefix_latents = ((MSR_PREFIX_FRAMES - 1) // 8) + 1
+            # Prefix length is user-selectable (Licon V1: 17/25/33/41; V2 adds 49/57/65).
+            # Read from the timeline, validate against the allowed 8n+1 set, else default.
+            _msr_frames = int(tdata.get("msr_prefix_frames", MSR_PREFIX_FRAMES) or MSR_PREFIX_FRAMES)
+            if _msr_frames not in (17, 25, 33, 41, 49, 57, 65):
+                log.warning("[LTXDirector] Invalid msr_prefix_frames=%s, using %d.", _msr_frames, MSR_PREFIX_FRAMES)
+                _msr_frames = MSR_PREFIX_FRAMES
+            prefix_latents = ((_msr_frames - 1) // 8) + 1
             tail_latents = prefix_latents
             total_latent_frames = clean_latent_frames + tail_latents
             tail_pixels = tail_latents * 8
@@ -1592,7 +1625,7 @@ class LTXDirector(io.ComfyNode):
                 [1, 128, total_latent_frames, latent_h // 32, latent_w // 32], device=_dev,
             )}
             patched, conditioning = _encode_relay(
-                model, clip, dummy_full, global_prompt, injected_local, injected_lengths, epsilon,
+                model, clip, dummy_full, global_prompt, injected_local, injected_lengths, epsilon, disable_relay,
             )
 
             # Clean base latent (the true visible region); the guide node pads + appends keyframes per stage.
@@ -1672,7 +1705,7 @@ class LTXDirector(io.ComfyNode):
                     [1, 128, total_latent_frames, latent_h // 32, latent_w // 32], device=_dev,
                 )}
                 patched, conditioning = _encode_relay(
-                    model, clip, dummy_full, global_prompt, injected_local, injected_lengths, epsilon,
+                    model, clip, dummy_full, global_prompt, injected_local, injected_lengths, epsilon, disable_relay,
                 )
 
                 if optional_latent is None:
@@ -1704,7 +1737,7 @@ class LTXDirector(io.ComfyNode):
                     latent = optional_latent
 
                 patched, conditioning = _encode_relay(
-                    model, clip, latent, global_prompt, local_prompts, segment_lengths, epsilon,
+                    model, clip, latent, global_prompt, local_prompts, segment_lengths, epsilon, disable_relay,
                 )
 
         # --- Build Audio Output ---

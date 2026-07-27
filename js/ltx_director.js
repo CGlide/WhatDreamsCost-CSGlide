@@ -468,7 +468,7 @@ const STYLES = `
     z-index: 9999;
     box-shadow: 0 4px 20px rgba(0,0,0,0.7);
     min-width: 250px;
-    width: 560px;
+    width: 440px;
     max-width: 92vw;
     max-height: 60vh;
     overflow-y: auto;
@@ -803,6 +803,8 @@ function parseInitial(jsonStr) {
     normalStartFrame: 0,
     normalDurationFrames: 120,
     reference_mode: "OFF",
+    disable_prompt_relay: false,
+    msr_prefix_frames: 41,
     analyzeProvider: "ollama",
     analyzeBaseUrl: "",
     analyzeModel: "",
@@ -834,6 +836,8 @@ function parseInitial(jsonStr) {
       if (p.normalStartFrame !== undefined) parsed.normalStartFrame = p.normalStartFrame;
       if (p.normalDurationFrames !== undefined) parsed.normalDurationFrames = p.normalDurationFrames;
       if (p.reference_mode !== undefined) parsed.reference_mode = p.reference_mode;
+      if (p.disable_prompt_relay !== undefined) parsed.disable_prompt_relay = p.disable_prompt_relay;
+      if (p.msr_prefix_frames !== undefined) parsed.msr_prefix_frames = p.msr_prefix_frames;
       if (p.analyzeProvider !== undefined) parsed.analyzeProvider = p.analyzeProvider;
       if (p.analyzeBaseUrl !== undefined) parsed.analyzeBaseUrl = p.analyzeBaseUrl;
       if (p.analyzeModel !== undefined) parsed.analyzeModel = p.analyzeModel;
@@ -2449,6 +2453,8 @@ class TimelineEditor {
     refOptionSelect.value = this.timeline.reference_mode || "OFF";
     refOptionSelect.addEventListener("change", (e) => {
       this.timeline.reference_mode = e.target.value;
+      // Slot badge + placeholder differ per mode, so redraw them on every switch.
+      if (this.updateCharacterSlotsUI) this.updateCharacterSlotsUI();
       this.commitChanges();
     });
     this.refOptionSelect = refOptionSelect;
@@ -2981,12 +2987,27 @@ class TimelineEditor {
     this.globalPromptLabel.textContent = "Global Prompt";
     globalPromptWrapper.appendChild(this.globalPromptLabel);
 
+    // Keep keystrokes (esp. Delete/Backspace) inside the prompt textareas - otherwise they
+    // bubble to LiteGraph's canvas shortcut handler and delete the selected timeline segment.
+    const _stopKeys = (e) => { e.stopPropagation(); };
     this.globalPromptInput = document.createElement("textarea");
     this.globalPromptInput.className = "prcs-prompt-area";
     this.globalPromptInput.placeholder = "Enter global prompt here...";
     this.globalPromptInput.spellcheck = true;
     globalPromptWrapper.appendChild(this.globalPromptInput);
 
+    // Discreet "prompt relay off" hint, bottom-right of the global box. Shown only
+    // while relay is disabled (applyRelayModeUI toggles it).
+    this.relayOffHint = document.createElement("div");
+    this.relayOffHint.textContent = "prompt relay off";
+    Object.assign(this.relayOffHint.style, {
+      position: "absolute", right: "10px", bottom: "6px", fontSize: "10px",
+      color: "#5c5c5c", fontStyle: "italic", pointerEvents: "none", userSelect: "none",
+      display: "none", zIndex: "2",
+    });
+    globalPromptWrapper.appendChild(this.relayOffHint);
+
+    this.globalPromptInput.addEventListener("keydown", _stopKeys);
     this.globalPromptInput.addEventListener("focus", () => {
       globalPromptWrapper.classList.add("focus-active");
       this.wrapper.classList.add("has-focus");
@@ -3136,7 +3157,22 @@ class TimelineEditor {
 
     this.segmentPromptLabel = document.createElement("div");
     this.segmentPromptLabel.className = "prcs-prompt-label";
-    this.segmentPromptLabel.textContent = "Segment Prompt";
+    // Label text lives in its own span so updating it never wipes the zone dots that
+    // sit beside it (textContent on the parent would delete all children).
+    this.segmentPromptLabelText = document.createElement("span");
+    this.segmentPromptLabelText.textContent = "Segment Prompt";
+    this.segmentPromptLabel.appendChild(this.segmentPromptLabelText);
+    // Inline zone dots: one per prompt zone (non-anchor image segment), coloured to match
+    // the timeline zone ribbon. Click selects that zone's segment; the selected one gets a
+    // white outline. Only populated when Prompt Zones is on (refreshZoneDots handles that).
+    this.zoneDotsWrap = document.createElement("span");
+    Object.assign(this.zoneDotsWrap.style, {
+      display: "inline-flex", alignItems: "center", gap: "5px", marginLeft: "8px", verticalAlign: "middle",
+      // The parent label is pointer-events:none (so it never blocks the textarea); the dots
+      // must opt back IN or their clicks never fire.
+      pointerEvents: "auto",
+    });
+    this.segmentPromptLabel.appendChild(this.zoneDotsWrap);
     this.promptWrapper.appendChild(this.segmentPromptLabel);
 
     this.promptInput = document.createElement("textarea");
@@ -3144,7 +3180,10 @@ class TimelineEditor {
     this.promptInput.placeholder = "No segment selected!";
     this.promptInput.style.opacity = "0.4";
     this.promptWrapper.appendChild(this.promptInput);
+    // Reflect relay mode on first build (segment prompt hidden if relay already off).
+    if (this.applyRelayModeUI) { try { this.applyRelayModeUI(); } catch (_) { } }
 
+    this.promptInput.addEventListener("keydown", _stopKeys);
     this.promptInput.addEventListener("focus", () => {
       this.promptWrapper.classList.add("focus-active");
       this.wrapper.classList.add("has-focus");
@@ -5573,6 +5612,87 @@ class TimelineEditor {
     }
   }
 
+  _relayOff() { return !!this.timeline.disable_prompt_relay; }
+
+  // Rebuild the inline zone dots after the segment prompt label. One dot per prompt zone
+  // (non-anchor image segment, in start order), coloured to match the timeline zone ribbon.
+  // Hidden when Prompt Zones is off or relay is off. Clicking a dot selects that segment.
+  refreshZoneDots() {
+    const wrap = this.zoneDotsWrap;
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const zonesOn = !!(this.node && this.node.properties && this.node.properties.showPromptZones);
+    if (!zonesOn || this._relayOff()) return;
+
+    const ZONE_FILLS = ["#1b64a8", "#0f6e56", "#9e3b1c", "#5b3a8c", "#8a6d1f", "#2f7d7a", "#7a2f5c", "#3f6d1f"];
+    // Zones = segments that OWN a prompt: real image segments and text segments, in start
+    // order. Anchors and ghosts inherit the previous prompt, so they don't open a zone -
+    // this mirrors the timeline ribbon's own zone logic exactly.
+    const segs = (this.timeline.segments || [])
+      .filter(s => s.type !== "ghost" && !s.isAnchor)
+      .slice()
+      .sort((a, b) => a.start - b.start);
+    if (segs.length < 1) return;
+
+    segs.forEach((seg, i) => {
+      const dot = document.createElement("span");
+      const selected = (this.timeline.segments[this.selectedIndex] &&
+        this.timeline.segments[this.selectedIndex].id === seg.id);
+      Object.assign(dot.style, {
+        width: "12px", height: "12px", borderRadius: "50%", cursor: "pointer",
+        background: ZONE_FILLS[i % ZONE_FILLS.length],
+        boxSizing: "border-box", transition: "box-shadow 0.1s, transform 0.1s",
+        border: selected ? "2px solid #fff" : "2px solid rgba(0,0,0,0.35)",
+        transform: selected ? "scale(1.15)" : "scale(1)",
+        pointerEvents: "auto",
+      });
+      const preview = (seg.prompt || "").trim();
+      dot.title = preview ? (`Zone ${i + 1}: ` + (preview.length > 60 ? preview.slice(0, 60) + "\u2026" : preview)) : `Zone ${i + 1} (no prompt)`;
+      dot.addEventListener("click", (e) => {
+        e.stopPropagation();
+        try {
+          const idx = this.timeline.segments.findIndex(s => s.id === seg.id);
+          if (idx !== -1) {
+            this.selectedSegmentIds = []; // NOT null: render()'s sort calls .includes() on this unconditionally
+            // Text segments live on the image track and are selected as "image",
+            // exactly like a normal canvas click does (there is no "text" selection type).
+            this.selectionType = "image";
+            this.selectedIndex = idx;
+            if (this.updateUIFromSelection) this.updateUIFromSelection();
+            this.render();
+          }
+        } catch (err) {
+          // Surface the real error instead of silently blanking the canvas.
+          console.error("[LTXDirector ZoneDots] click failed:", err);
+        }
+      });
+      wrap.appendChild(dot);
+    });
+  }
+
+  // Show/hide the whole Segment Prompt panel based on relay mode. Segment TEXT is kept
+  // in the model (seg.prompt) untouched - only the panel is hidden - so toggling relay
+  // back ON restores every prompt exactly as it was.
+  applyRelayModeUI() {
+    const off = this._relayOff();
+    if (this.promptWrapper) this.promptWrapper.style.display = off ? "none" : "block";
+    if (this.relayOffHint) this.relayOffHint.style.display = off ? "block" : "none";
+    // With the segment-prompt panel hidden there is spare vertical space - collapse the
+    // (now empty) segment container and let the Global Prompt box absorb its height. The
+    // user's chosen global height is preserved and restored when relay comes back on.
+    const segH = this.propHeight || 120;
+    if (this.propContainer) this.propContainer.style.display = off ? "none" : "";
+    if (this.globalPropContainer) {
+      if (off) {
+        const grown = (this.globalPropHeight || 60) + segH + 10;
+        this.globalPropContainer.style.height = `${grown}px`;
+      } else {
+        this.globalPropContainer.style.height = `${this.globalPropHeight || 60}px`;
+      }
+    }
+  }
+
   updateUIFromSelection() {
     if (this.selectedSegmentIds && this.isMultiSelectActive()) {
       if (this.globalPromptInput) {
@@ -5589,7 +5709,7 @@ class TimelineEditor {
 
       if (this.segmentPromptLabel) {
         this.segmentPromptLabel.style.display = "block";
-        this.segmentPromptLabel.textContent = "Segment Prompt";
+        this.segmentPromptLabelText.textContent = "Segment Prompt";
       }
 
       if (this.strengthRow) this.strengthRow.style.display = "flex";
@@ -5732,7 +5852,7 @@ class TimelineEditor {
       this.promptInput.value = this.getGlobalPrompt();
       if (this.segmentPromptLabel) {
         this.segmentPromptLabel.style.display = "block";
-        this.segmentPromptLabel.textContent = "Global Prompt (IC-LoRA)";
+        this.segmentPromptLabelText.textContent = "Global Prompt (IC-LoRA)";
       }
 
       this.strengthRow.style.display = "flex";
@@ -5751,7 +5871,7 @@ class TimelineEditor {
     } else {
       if (this.segmentPromptLabel) {
         this.segmentPromptLabel.style.display = "block";
-        this.segmentPromptLabel.textContent = "Segment Prompt";
+        this.segmentPromptLabelText.textContent = "Segment Prompt";
       }
       if (this.globalPromptInput) {
         this.globalPromptInput.disabled = false;
@@ -5769,6 +5889,10 @@ class TimelineEditor {
       this.vidAttnLabel.style.display = "none";
       this.vidAttnValue.style.display = "none";
 
+      if (this._relayOff()) {
+        // Relay OFF: no per-segment prompts at all - only the Global Prompt drives the clip.
+        if (this.promptWrapper) this.promptWrapper.style.display = "none";
+      }
       if (seg) {
         const isAnchorSeg = !!seg.isAnchor;
         if (this.selectionType !== "motion") {
@@ -5780,6 +5904,15 @@ class TimelineEditor {
         // Anchors are guide-only, so lock their prompt field but leave Guide Strength active.
         this.promptInput.disabled = isAnchorSeg;
         this.promptInput.style.opacity = isAnchorSeg ? "0.5" : "1.0";
+
+        // Prompt Relay OFF: per-segment prompts do nothing (the global prompt drives the
+        // whole clip), so hard-disable the field rather than let people type text that is
+        // silently ignored. Anchors stay locked regardless.
+        if (!isAnchorSeg && this.timeline.disable_prompt_relay) {
+          this.promptInput.disabled = true;
+          this.promptInput.style.opacity = "0.5";
+          this.promptInput.placeholder = "Prompt Relay is OFF — segment prompts are disabled. Use the Global Prompt below.";
+        }
 
         const isImage = (this.selectionType === "image") && (seg.type === "image" || seg.type === "video");
         const strength = isImage ? (seg.guideStrength ?? 1.0) : 1.0;
@@ -5807,6 +5940,10 @@ class TimelineEditor {
         this.segmentBoundsDisplay.textContent = "Start: - | End: - | Length: -";
       }
     }
+    // Rebuild zone dots last, after any label text updates above (which would otherwise
+    // not touch them now that the label text lives in its own span - but the selection
+    // highlight still needs refreshing here).
+    if (this.refreshZoneDots) { try { this.refreshZoneDots(); } catch (_) { } }
   }
 
 
@@ -5879,7 +6016,8 @@ class TimelineEditor {
 
     // 2. Hide/show toolbar action buttons
     if (this.uploadBtn) this.uploadBtn.style.display = isRetake ? "none" : "";
-    if (this.addTextBtn) this.addTextBtn.style.display = isRetake ? "none" : "";
+    // Add Text is a prompt-segment feature; hidden in retake AND when relay is off.
+    if (this.addTextBtn) this.addTextBtn.style.display = (isRetake || this._relayOff()) ? "none" : "";
     if (this.uploadAudioBtn) this.uploadAudioBtn.style.display = isRetake ? "none" : "";
     if (this.uploadMotionBtn) this.uploadMotionBtn.style.display = isRetake ? "none" : "";
     if (this.deleteBtn) this.deleteBtn.style.display = isRetake ? "none" : "";
@@ -5893,7 +6031,7 @@ class TimelineEditor {
 
     // 4. Update the prompt labels
     if (this.segmentPromptLabel) {
-      this.segmentPromptLabel.textContent = isRetake ? "Retake Prompt" : "Local Prompt";
+      this.segmentPromptLabelText.textContent = isRetake ? "Retake Prompt" : "Local Prompt";
     }
 
     // 5. Update UI selection inputs
@@ -6430,37 +6568,31 @@ class TimelineEditor {
           const natH = isVid ? drawSource.videoHeight : drawSource.naturalHeight;
 
           if (natW > 0) {
+            // Fill strategy depends on whether the segment is narrower or wider than one
+            // image at full block height:
+            //  - narrower  -> "cover": image fills the height, centre-cropped to the width
+            //    (a short segment shows a clean vertical slice, no shrinking).
+            //  - wider     -> tile the image left/right so an extended segment loops
+            //    seamlessly instead of showing black bars.
             const imgRatio = natW / natH;
-            const boxRatio = pxWidth / this.blockHeight;
-            let drawW, drawH, drawX, drawY;
-            if (imgRatio > boxRatio) {
-              drawW = pxWidth; drawH = pxWidth / imgRatio;
-              drawX = startX; drawY = RULER_HEIGHT + (this.blockHeight - drawH) / 2;
-            } else {
-              drawH = this.blockHeight; drawW = this.blockHeight * imgRatio;
-              drawY = RULER_HEIGHT; drawX = startX + (pxWidth - drawW) / 2;
-            }
+            const drawH = this.blockHeight;
+            const drawW = this.blockHeight * imgRatio;
+            const drawY = RULER_HEIGHT;
+            const drawX = startX + (pxWidth - drawW) / 2;
 
-            // Clip to segment bounds so tiled images don't bleed into adjacent segments
             this.ctx.save();
             this.ctx.beginPath();
             this.ctx.rect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
             this.ctx.clip();
 
-            if (imgRatio > boxRatio) {
-              // Fits width, vertical letterboxing (black bars top/bottom) — keep as is
-              this.ctx.drawImage(drawSource, drawX, drawY, drawW, drawH);
-            } else {
-              // Fits height, horizontal letterboxing (black bars left/right)
-              this.ctx.drawImage(drawSource, drawX, drawY, drawW, drawH);
-
-              // Tile left
+            this.ctx.drawImage(drawSource, drawX, drawY, drawW, drawH);
+            if (drawW < pxWidth) {
+              // Segment is wider than one image tile — repeat it to fill the whole width.
               let leftX = drawX - drawW;
               while (leftX + drawW > startX) {
                 this.ctx.drawImage(drawSource, leftX, drawY, drawW, drawH);
                 leftX -= drawW;
               }
-              // Tile right
               let rightX = drawX + drawW;
               while (rightX < startX + pxWidth) {
                 this.ctx.drawImage(drawSource, rightX, drawY, drawW, drawH);
@@ -6594,8 +6726,8 @@ class TimelineEditor {
             this.ctx.restore();
           }
 
-          // --- Prompt subtitle overlay ---
-          if (seg.prompt && seg.type !== "ghost" && pxWidth > 24) {
+          // --- Prompt subtitle overlay --- (hidden entirely when relay is off)
+          if (!this._relayOff() && seg.prompt && seg.type !== "ghost" && pxWidth > 24) {
             const overlayH = Math.round(this.blockHeight * 0.20);
             const overlayY = RULER_HEIGHT + this.blockHeight - overlayH;
 
@@ -6628,7 +6760,7 @@ class TimelineEditor {
             this.ctx.fillText(label, startX + pxWidth / 2, overlayY + overlayH / 2);
             this.ctx.restore();
           }
-        } else if (seg.type === "text") {
+        } else if (seg.type === "text" && !this._relayOff()) {
           const pad = 8;
           const boxW = pxWidth - pad * 2;
           if (boxW > 12) {
@@ -6676,7 +6808,7 @@ class TimelineEditor {
         if (isSelected) {
           // Image Anchors get an orange outline so they read differently from
           // prompt-synced segments (which stay white when selected).
-          const outlineColor = seg.isAnchor ? "#ff9d2e" : "#fff";
+          const outlineColor = (seg.isAnchor && !this._relayOff()) ? "#ff9d2e" : "#fff";
           this.ctx.strokeStyle = outlineColor;
           this.ctx.lineWidth = 2;
           this.ctx.strokeRect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
@@ -6698,7 +6830,7 @@ class TimelineEditor {
 
         // Anchor glyph: drawn for anchors whether idle OR selected, so the marker
         // stays visible on selection. Bottom-right corner, tiny dot fallback if thin.
-        if (seg.isAnchor && seg.type !== "ghost") {
+        if (!this._relayOff() && seg.isAnchor && seg.type !== "ghost") {
           const _anchBottom = RULER_HEIGHT + this.blockHeight;
           if (pxWidth >= 24 && this.blockHeight > 30) {
             const R = 9;
@@ -6741,7 +6873,52 @@ class TimelineEditor {
       // prompt (they inherit the preceding one), so they never open a new zone;
       // the previous prompt's zone runs straight through them. This mirrors the
       // prompt-relay logic used at export time, so what you see is what renders.
-      if (totalFrames > 0 && this.blockHeight > 20) {
+      // Relay OFF: a single zone bar spanning the whole timeline, showing the GLOBAL
+      // prompt (there are no per-segment prompts in this mode). Same look as one
+      // prompt-zone pill, but full width - so the timeline still reads as "one prompt
+      // over everything" instead of a blank ruler.
+      if (this._relayOff() && totalFrames > 0 && this.blockHeight > 20 && this.node.properties.showPromptZones) {
+        const ZONE_BAR_H = 18, RAD = 5, GAP = 2;
+        const zoneBarY = RULER_HEIGHT;
+        const gp = (this.timeline.global_prompt || "").trim();
+        const drawPill = (x, y, w, h, r) => {
+          r = Math.min(r, h / 2, w / 2);
+          this.ctx.beginPath();
+          this.ctx.moveTo(x + r, y);
+          this.ctx.arcTo(x + w, y, x + w, y + h, r);
+          this.ctx.arcTo(x + w, y + h, x, y + h, r);
+          this.ctx.arcTo(x, y + h, x, y, r);
+          this.ctx.arcTo(x, y, x + w, y, r);
+          this.ctx.closePath();
+        };
+        this.ctx.fillStyle = "rgba(14, 16, 22, 1)";
+        this.ctx.fillRect(0, zoneBarY, width, ZONE_BAR_H);
+        const px = GAP, pillW = Math.max(0, width - GAP * 2);
+        if (pillW >= 2) {
+          this.ctx.fillStyle = "#1b64a8";
+          drawPill(px, zoneBarY, pillW, ZONE_BAR_H, RAD);
+          this.ctx.fill();
+          this.ctx.save();
+          this.ctx.beginPath();
+          this.ctx.rect(px + 8, zoneBarY, pillW - 12, ZONE_BAR_H);
+          this.ctx.clip();
+          this.ctx.font = "bold 11px sans-serif";
+          this.ctx.textAlign = "left";
+          this.ctx.textBaseline = "middle";
+          const has = gp.length > 0;
+          this.ctx.fillStyle = has ? "#ffffff" : "rgba(255,255,255,0.6)";
+          let label = has ? gp : "(global prompt)";
+          const maxW = pillW - 16;
+          if (this.ctx.measureText(label).width > maxW) {
+            while (label.length > 0 && this.ctx.measureText(label + "\u2026").width > maxW) label = label.slice(0, -1);
+            label += "\u2026";
+          }
+          this.ctx.fillText(label, px + 8, zoneBarY + ZONE_BAR_H / 2 + 0.5);
+          this.ctx.restore();
+        }
+      }
+
+      if (!this._relayOff() && totalFrames > 0 && this.blockHeight > 20) {
         const zoneSegs = sortedSegments
           .filter(s => s.type !== "ghost")
           .slice()
@@ -9320,10 +9497,29 @@ class TimelineEditor {
 
         slot.appendChild(previewsRow);
 
+        // In Licon MSR the reference IMAGE carries identity, so the slot description is
+        // used as a SHORT anchor phrase in the prompt instead of a full description.
+        const msrMode = (this.timeline.reference_mode || "OFF") === "Licon MSR (Prefix)";
+        if (msrMode) {
+          slot.style.position = "relative";
+          const badge = document.createElement("div");
+          badge.textContent = "MSR";
+          badge.title = "Licon MSR mode: use a short 3-5 word label - the reference image carries the identity.";
+          Object.assign(badge.style, {
+            position: "absolute", top: "3px", left: "4px", zIndex: "3",
+            color: "#8fe3d6", background: "rgba(0,0,0,0.55)", borderRadius: "3px",
+            padding: "0 3px", fontSize: "9px", fontWeight: "700", letterSpacing: "0.5px",
+            pointerEvents: "none", userSelect: "none",
+          });
+          slot.appendChild(badge);
+        }
+
         const descInput = document.createElement("textarea");
         descInput.className = "prcs-character-desc";
         descInput.value = data.description || "";
-        descInput.placeholder = "manual description...";
+        descInput.placeholder = msrMode
+          ? "short label, e.g. man in yellow jacket"
+          : "manual description...";
         descInput.addEventListener("input", () => {
           this.timeline.characters[i].description = descInput.value;
           this.commitChanges();
@@ -9387,6 +9583,8 @@ class TimelineEditor {
           provider: this.timeline.analyzeProvider || "ollama",
           base_url: this.timeline.analyzeBaseUrl || "",
           model: this.timeline.analyzeModel || "",
+          // MSR wants a 3-5 word anchor phrase rather than a full description.
+          short: (this.timeline.reference_mode || "OFF") === "Licon MSR (Prefix)",
         })
       });
       const result = await resp.json();
@@ -9659,6 +9857,8 @@ class TimelineEditor {
       normalStartFrame: this.timeline.normalStartFrame,
       normalDurationFrames: this.timeline.normalDurationFrames,
       reference_mode: this.timeline.reference_mode || "OFF",
+      disable_prompt_relay: !!this.timeline.disable_prompt_relay,
+      msr_prefix_frames: this.timeline.msr_prefix_frames || 41,
       analyzeProvider: this.timeline.analyzeProvider || "ollama",
       analyzeBaseUrl: this.timeline.analyzeBaseUrl || "",
       analyzeModel: this.timeline.analyzeModel || "",
@@ -10406,7 +10606,7 @@ class TimelineEditor {
     // 4b. Define Convert to / from Image Anchor (image segments only)
     // ==========================================
     let anchorToggleBtn = null;
-    if (trackType === "image" && seg.type === "image") {
+    if (trackType === "image" && seg.type === "image" && !this._relayOff()) {
       anchorToggleBtn = document.createElement("button");
       anchorToggleBtn.className = "prcs-gap-menu-btn";
       const anchorIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ff9d2e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg>`;
@@ -10418,6 +10618,31 @@ class TimelineEditor {
         this.commitChanges();
         // If this segment is the one shown in the side panel, refresh it so the
         // prompt box enables/disables and the strength row updates immediately.
+        if (this.selectedSegmentIds && this.selectedSegmentIds.includes(seg.id)) {
+          this.updateUIFromSelection();
+        }
+        this.render();
+        this.dismissContextMenu();
+      };
+    }
+
+    // Convert a plain image segment into a text (prompt-only) segment, keeping its prompt.
+    // Only in PR mode (text segments are a prompt-relay concept) and only for real image
+    // segments (not anchors, which have no prompt of their own).
+    let toTextBtn = null;
+    if (trackType === "image" && seg.type === "image" && !seg.isAnchor && !this._relayOff()) {
+      toTextBtn = document.createElement("button");
+      toTextBtn.className = "prcs-gap-menu-btn";
+      const textIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>`;
+      toTextBtn.innerHTML = `${textIcon} Convert to Text Segment`;
+      toTextBtn.onclick = () => {
+        // Keep the prompt; shed the image payload so it renders/behaves as a text segment.
+        seg.type = "text";
+        delete seg.imageFile;
+        delete seg.imageB64;
+        delete seg.imgObj;
+        delete seg.isEndFrame;
+        this.commitChanges();
         if (this.selectedSegmentIds && this.selectedSegmentIds.includes(seg.id)) {
           this.updateUIFromSelection();
         }
@@ -10483,6 +10708,10 @@ class TimelineEditor {
     // Very top: Convert to / from Image Anchor (image segments only)
     if (anchorToggleBtn) {
       menu.appendChild(anchorToggleBtn);
+      menu.appendChild(makeDivider());
+    }
+    if (toTextBtn) {
+      menu.appendChild(toTextBtn);
       menu.appendChild(makeDivider());
     }
 
@@ -10581,11 +10810,11 @@ class TimelineEditor {
         this.addSegmentInGap(gap.frameStart, gap.frameEnd, "text");
         this.dismissContextMenu();
       };
-      menu.appendChild(textBtn);
+      if (!this._relayOff()) menu.appendChild(textBtn);
 
       const imgBtn = document.createElement("button");
       imgBtn.className = "prcs-gap-menu-btn";
-      imgBtn.innerHTML = `${ICONS.upload} Image Segment`;
+      imgBtn.innerHTML = this._relayOff() ? `${ICONS.upload} Guide Image` : `${ICONS.upload} Image Segment`;
       imgBtn.onclick = () => {
         this.dismissContextMenu();
         const fi = document.createElement("input");
@@ -10615,7 +10844,7 @@ class TimelineEditor {
         });
         fi.click();
       };
-      menu.appendChild(anchorBtn);
+      if (!this._relayOff()) menu.appendChild(anchorBtn);
 
       const pasteImageBtn = document.createElement("button");
       pasteImageBtn.className = "prcs-gap-menu-btn";
@@ -10655,7 +10884,7 @@ class TimelineEditor {
         fi.click();
       };
 
-      menu.appendChild(vidBtn);
+      if (!this._relayOff()) menu.appendChild(vidBtn);
       menu.appendChild(pasteImageBtn);
     } else if (currentTrack === "motion") {
       const vidBtn = document.createElement("button");
@@ -10783,11 +11012,20 @@ class TimelineEditor {
         fi.click();
       });
 
-      menu.appendChild(textBtn);
-      menu.appendChild(imgBtn);
-      menu.appendChild(anchorBtn);
-      menu.appendChild(vidBtn);
-      menu.appendChild(pasteImageBtn);
+      if (this._relayOff()) {
+        // Relay OFF: images are just guides at a time - no prompt segments, no anchor
+        // distinction, no per-clip video segments. Offer only Image + Paste Image, and
+        // label it "Guide Image" to match the mental model.
+        imgBtn.innerHTML = `${ICONS.upload} Guide Image`;
+        menu.appendChild(imgBtn);
+        menu.appendChild(pasteImageBtn);
+      } else {
+        menu.appendChild(textBtn);
+        menu.appendChild(imgBtn);
+        menu.appendChild(anchorBtn);
+        menu.appendChild(vidBtn);
+        menu.appendChild(pasteImageBtn);
+      }
     } else if (currentTrack === "motion") {
       const vidBtn = document.createElement("button");
       vidBtn.className = "prcs-gap-menu-btn";
@@ -11089,6 +11327,9 @@ class TimelineEditor {
       // displaying the previous Duration/Start/End/resolution values.
       if (this.node._ltxSettingsRefresh) { try { this.node._ltxSettingsRefresh(); } catch (_) { } }
 
+      // Reflect relay mode from the loaded timeline (hides segment prompt if it was off).
+      if (this.applyRelayModeUI) { try { this.applyRelayModeUI(); } catch (_) { } }
+
       // Trigger ComfyUI's change-detection pipeline the same way a real user
       // interaction does: by dispatching a pointerup on the canvas. This fires
       // LiteGraph's onAfterChange → ChangeTracker.captureCanvasState() →
@@ -11155,6 +11396,8 @@ class TimelineEditor {
         normalStartFrame: this.timeline.normalStartFrame,
         normalDurationFrames: this.timeline.normalDurationFrames,
         reference_mode: this.timeline.reference_mode || "OFF",
+        disable_prompt_relay: !!this.timeline.disable_prompt_relay,
+        msr_prefix_frames: this.timeline.msr_prefix_frames || 41,
         analyzeProvider: this.timeline.analyzeProvider || "ollama",
         analyzeBaseUrl: this.timeline.analyzeBaseUrl || "",
         analyzeModel: this.timeline.analyzeModel || "",
@@ -11244,9 +11487,16 @@ class TimelineEditor {
     const menu = document.createElement("div");
     menu.className = "prcs-settings-menu";
     // Set sizing inline so it applies even if the injected stylesheet is cached/stale.
-    menu.style.width = "560px";
-    menu.style.maxWidth = "92vw";
-    menu.style.maxHeight = "60vh";
+    // The whole menu is scaled to ~72% via transform (one knob shrinks every child
+    // proportionally - text, buttons, gaps, padding - instead of resizing each element).
+    // transform-origin top-left keeps it pinned to the gear button; max dims are divided
+    // by the scale so the scrollable area still matches the viewport correctly.
+    const _menuScale = 0.72;
+    menu.style.transform = `scale(${_menuScale})`;
+    menu.style.transformOrigin = "top left";
+    menu.style.width = "440px";
+    menu.style.maxWidth = `${Math.round(92 / _menuScale)}vw`;
+    menu.style.maxHeight = `${Math.round(60 / _menuScale)}vh`;
     menu.style.overflowY = "auto";
 
     // Title & Close Button Container
@@ -11317,6 +11567,106 @@ class TimelineEditor {
     const div2 = document.createElement("hr");
     div2.className = "prcs-settings-divider";
     menu.appendChild(div2);
+
+    // --- Prompt Relay enable/disable ---------------------------------------
+    // OFF = skip temporal prompt masking: the whole clip is driven by the global
+    // prompt, attention is left unpatched (faster), and the timeline collapses to a
+    // single prompt-less guide zone. Stored on the timeline so it saves with the
+    // workflow; the Python reads tdata["disable_prompt_relay"].
+    const relayRow = document.createElement("div");
+    Object.assign(relayRow.style, {
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      gap: "16px", padding: "4px 2px 8px", flexWrap: "nowrap",
+    });
+    const relayLabelWrap = document.createElement("div");
+    Object.assign(relayLabelWrap.style, { display: "flex", flexDirection: "column", gap: "1px", minWidth: "0", flex: "1 1 auto" });
+    const relayLabel = document.createElement("span");
+    relayLabel.textContent = "Prompt Relay";
+    Object.assign(relayLabel.style, { fontSize: "12px", fontWeight: "600", color: "#dcdcdc", whiteSpace: "nowrap" });
+    const relaySub = document.createElement("span");
+    relaySub.textContent = "Off = global prompt only, images act as guides (faster)";
+    Object.assign(relaySub.style, { fontSize: "10px", color: "#8a8a8a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+    relayLabelWrap.appendChild(relayLabel); relayLabelWrap.appendChild(relaySub);
+
+    // Discreet pill toggle: dim grey track when OFF, subtle green when ON.
+    const relayToggle = document.createElement("div");
+    Object.assign(relayToggle.style, {
+      position: "relative", width: "42px", height: "22px", borderRadius: "11px",
+      flexShrink: "0", cursor: "pointer", transition: "background 0.15s, border-color 0.15s",
+      border: "1px solid #3a3a3a", boxSizing: "border-box",
+    });
+    const relayKnob = document.createElement("div");
+    Object.assign(relayKnob.style, {
+      position: "absolute", top: "2px", width: "16px", height: "16px", borderRadius: "50%",
+      background: "#d8d8d8", transition: "left 0.15s, background 0.15s",
+    });
+    relayToggle.appendChild(relayKnob);
+    const relayStateTxt = document.createElement("span");
+    Object.assign(relayStateTxt.style, { fontSize: "11px", fontWeight: "700", width: "26px", textAlign: "right", flexShrink: "0", letterSpacing: "0.5px" });
+
+    const paintRelay = () => {
+      const on = !this.timeline.disable_prompt_relay;
+      relayToggle.style.background = on ? "#1f3d2c" : "#242424";
+      relayToggle.style.borderColor = on ? "#2f6b47" : "#3a3a3a";
+      relayKnob.style.left = on ? "22px" : "2px";
+      relayKnob.style.background = on ? "#4ade80" : "#8a8a8a";
+      relayStateTxt.textContent = on ? "ON" : "OFF";
+      relayStateTxt.style.color = on ? "#4ade80" : "#7a7a7a";
+    };
+    const relayCtrl = document.createElement("div");
+    Object.assign(relayCtrl.style, { display: "flex", alignItems: "center", gap: "8px", flexShrink: "0" });
+    relayCtrl.appendChild(relayStateTxt); relayCtrl.appendChild(relayToggle);
+    relayToggle.addEventListener("click", () => {
+      this.timeline.disable_prompt_relay = !this.timeline.disable_prompt_relay;
+      paintRelay();
+      if (this.applyRelayModeUI) { try { this.applyRelayModeUI(); } catch (_) { } }
+      if (this.updateRetakeUIState) { try { this.updateRetakeUIState(); } catch (_) { } }
+      if (this.updateUIFromSelection) { try { this.updateUIFromSelection(); } catch (_) { } }
+      this.render();
+      this.commitChanges();
+    });
+    paintRelay();
+    relayRow.appendChild(relayLabelWrap); relayRow.appendChild(relayCtrl);
+    menu.appendChild(relayRow);
+
+    // --- MSR reference prefix length ---------------------------------------
+    // How many frames the reference slideshow runs before the video (the "runway" the
+    // model gets to lock identity). 41 = Licon V1/V2 default; 49/57/65 are V2-only and
+    // give a stronger lock at higher memory/compute cost. Independent of how many
+    // reference slots are filled. Stored on the timeline; Python reads msr_prefix_frames.
+    const msrRow = document.createElement("div");
+    Object.assign(msrRow.style, {
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      gap: "16px", padding: "4px 2px 8px", flexWrap: "nowrap",
+    });
+    const msrLabelWrap = document.createElement("div");
+    Object.assign(msrLabelWrap.style, { display: "flex", flexDirection: "column", gap: "1px", minWidth: "0", flex: "1 1 auto" });
+    const msrLabel = document.createElement("span");
+    msrLabel.textContent = "MSR Prefix";
+    Object.assign(msrLabel.style, { fontSize: "12px", fontWeight: "600", color: "#dcdcdc", whiteSpace: "nowrap" });
+    const msrSub = document.createElement("span");
+    msrSub.textContent = "Reference runway frames (49+ needs MSR V2)";
+    Object.assign(msrSub.style, { fontSize: "10px", color: "#8a8a8a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+    msrLabelWrap.appendChild(msrLabel); msrLabelWrap.appendChild(msrSub);
+
+    const MSR_FRAME_OPTS = [17, 25, 33, 41, 49, 57, 65];
+    const curMsr = this.timeline.msr_prefix_frames || 41;
+    const msrSel = createMenuSelect(
+      MSR_FRAME_OPTS.map(v => ({ value: String(v), label: String(v) })),
+      { width: "74px" }
+    );
+    msrSel.value = String(curMsr);
+    msrSel.style.flexShrink = "0";
+    msrSel.addEventListener("change", () => {
+      this.timeline.msr_prefix_frames = parseInt(msrSel.value) || 41;
+      this.commitChanges();
+    });
+    msrRow.appendChild(msrLabelWrap); msrRow.appendChild(msrSel);
+    menu.appendChild(msrRow);
+
+    const div2b = document.createElement("hr");
+    div2b.className = "prcs-settings-divider";
+    menu.appendChild(div2b);
 
     // Helper: fire a widget's callback safely
     const fireCallback = (w, val) => {
@@ -11439,6 +11789,7 @@ class TimelineEditor {
     const onZonesSegClick = (isEnabled) => {
       this.node.properties.showPromptZones = isEnabled;
       updateZonesActive(isEnabled);
+      if (this.refreshZoneDots) { try { this.refreshZoneDots(); } catch (_) { } }
       this.render();
       this.commitChanges(true);
     };
@@ -11694,11 +12045,13 @@ class TimelineEditor {
 
     refreshProviderRows();
 
-    // Position the menu below the anchor button (pop down)
+    // Position the menu below the anchor button (pop down). The menu is transform:scaled,
+    // so offsetWidth/Height report the UNSCALED size - multiply by _menuScale to get the
+    // real on-screen box, otherwise it drifts up-left away from the gear button.
     document.body.appendChild(menu);
     const rect = anchorEl.getBoundingClientRect();
-    const menuW = menu.offsetWidth || 230;
-    const menuH = menu.offsetHeight || 350;
+    const menuW = (menu.offsetWidth || 440) * _menuScale;
+    const menuH = (menu.offsetHeight || 350) * _menuScale;
     let left = rect.right - menuW;
     let top = rect.bottom + 6;
     if (left < 4) left = 4;

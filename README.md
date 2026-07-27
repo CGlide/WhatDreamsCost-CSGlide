@@ -1,5 +1,12 @@
-
 A Complete Timeline Editor For LTX 2.3. This is the sucessor of my previous nodes, and has loads of features in it. It was originally based off of [Kijai's Prompt Relay node](https://github.com/kijai/ComfyUI-PromptRelay) and my LTX Sequencer/Multi Image Loader nodes.
+
+
+<div align="center">
+<img width="722" height="809" alt="Capture d&#39;écran 2026-07-27 022931" src="https://github.com/user-attachments/assets/2d60e3ad-6014-4ae4-aec1-646d48319780" />
+</div>
+
+---
+
 
 https://github.com/user-attachments/assets/68dc826f-c65f-4f1e-86cd-4f2df17bacd8
 

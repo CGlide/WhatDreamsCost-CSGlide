@@ -11219,7 +11219,7 @@ class TimelineEditor {
         });
         const file = await fileHandle.getFile();
         const content = await file.text();
-        this._applyLoadedTimeline(content, fileHandle);
+        this._applyLoadedTimeline(await this._unpackIfNeeded(content), fileHandle);
       } else {
         // Fallback for browsers without showOpenFilePicker (e.g. Firefox)
         const input = document.createElement("input");
@@ -11229,7 +11229,7 @@ class TimelineEditor {
           const file = e.target.files[0];
           if (!file) return;
           const reader = new FileReader();
-          reader.onload = evt => this._applyLoadedTimeline(evt.target.result, null);
+          reader.onload = async evt => this._applyLoadedTimeline(await this._unpackIfNeeded(evt.target.result), null);
           reader.readAsText(file);
         };
         input.click();
@@ -11339,6 +11339,13 @@ class TimelineEditor {
       this.updateUIFromSelection();
       this.syncWidgetsAndUI();
       if (this.updateCharacterSlotsUI) this.updateCharacterSlotsUI();
+      // The reference-mode dropdown is only populated in createDOM(), so after a load it
+      // kept showing the previous mode even though this.timeline.reference_mode had been
+      // replaced. The render used the loaded value, the label lied about it, and touching
+      // the dropdown wrote the stale label back over the loaded value.
+      if (this.refOptionSelect) {
+        this.refOptionSelect.value = this.timeline.reference_mode || "OFF";
+      }
       this.commitChanges(true); // forces sync to UI and other widgets
 
 
@@ -11501,6 +11508,184 @@ class TimelineEditor {
     }
   }
 
+  // --- Packed timelines -----------------------------------------------------
+  // Nothing in a normal saved timeline is embedded: images, reference sheets, video and
+  // audio are all names resolved against ComfyUI's input folder at load time. That makes
+  // the file useless to anyone who doesn't already have those files. A packed save inlines
+  // them; loading one uploads them back into input/ and rewrites the references, so the
+  // live timeline stays filename-based and timeline_data never carries the bulk.
+  _walkAssetRefs(timeline, visit) {
+    if (!timeline) return;
+    const KEYS = ["imageFile", "videoFile", "audioFile"];
+    const walkArr = (arr) => (arr || []).forEach(s => {
+      if (!s) return;
+      KEYS.forEach(k => { if (typeof s[k] === "string" && s[k]) visit(s, k); });
+    });
+    walkArr(timeline.segments);
+    walkArr(timeline.motionSegments);
+    walkArr(timeline.audioSegments);
+    if (timeline.retakeVideo) {
+      KEYS.forEach(k => {
+        if (typeof timeline.retakeVideo[k] === "string" && timeline.retakeVideo[k]) {
+          visit(timeline.retakeVideo, k);
+        }
+      });
+    }
+    (timeline.characters || []).forEach(c => (c.images || []).forEach(img => {
+      if (img && !img.b64 && typeof img.name === "string" && img.name) visit(img, "name");
+    }));
+  }
+
+  // Re-encode an image blob as JPEG. Packed timelines are otherwise dominated by the
+  // original PNGs - guides get VAE-encoded before the model ever sees them, so lossless
+  // pixels buy nothing here. Non-images (video, audio) are passed through untouched.
+  async _blobToJpeg(blob, quality) {
+    if (!blob || !String(blob.type || "").startsWith("image/")) return blob;
+    try {
+      const bmp = await createImageBitmap(blob);
+      const canvas = document.createElement("canvas");
+      canvas.width = bmp.width;
+      canvas.height = bmp.height;
+      const ctx = canvas.getContext("2d");
+      // Flatten onto black: JPEG has no alpha, and unfilled canvas would go transparent.
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(bmp, 0, 0);
+      bmp.close && bmp.close();
+      const out = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+      return (out && out.size < blob.size) ? out : blob;
+    } catch (err) {
+      console.warn("[LTXDirector] JPEG re-encode failed, keeping original:", err);
+      return blob;
+    }
+  }
+
+  _viewUrlFor(ref) {
+    const parts = String(ref).split("/");
+    const filename = parts.pop();
+    const subfolder = parts.join("/");
+    return api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&subfolder=${encodeURIComponent(subfolder)}`);
+  }
+
+  async _getPackedPayload(onProgress, lossless) {
+    const payload = JSON.parse(this._getTimelineSavePayload());
+    const refs = new Set();
+    this._walkAssetRefs(payload.timeline, (obj, key) => refs.add(obj[key]));
+
+    const packed = {};
+    let done = 0;
+    let rawBytes = 0;
+    let outBytes = 0;
+    for (const ref of refs) {
+      if (onProgress) onProgress(`Packing ${++done}/${refs.size}...`);
+      try {
+        const r = await fetch(this._viewUrlFor(ref));
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const original = await r.blob();
+        const blob = lossless ? original : await this._blobToJpeg(original, 0.92);
+        rawBytes += original.size;
+        outBytes += blob.size;
+        packed[ref] = await new Promise((res, rej) => {
+          const fr = new FileReader();
+          fr.onload = () => res(fr.result);
+          fr.onerror = () => rej(new Error("read failed"));
+          fr.readAsDataURL(blob);
+        });
+      } catch (err) {
+        console.warn("[LTXDirector] Could not pack asset:", ref, err);
+      }
+    }
+
+    payload.packedVersion = 1;
+    payload.packed = packed;
+    const mb = (n) => (n / 1048576).toFixed(1);
+    console.log(`[LTXDirector] Packed ${Object.keys(packed).length}/${refs.size} asset(s): `
+      + `${mb(rawBytes)} MB source -> ${mb(outBytes)} MB embedded`
+      + (lossless ? " (lossless)" : " (JPEG 0.92)"));
+    return { json: JSON.stringify(payload, null, 2), count: Object.keys(packed).length, total: refs.size };
+  }
+
+  async _unpackIfNeeded(jsonStr) {
+    let data;
+    try { data = JSON.parse(jsonStr); } catch (e) { return jsonStr; }
+    if (!data || !data.packed || !Object.keys(data.packed).length) return jsonStr;
+
+    const map = {};
+    for (const [ref, dataUrl] of Object.entries(data.packed)) {
+      try {
+        const blob = await (await fetch(dataUrl)).blob();
+        const filename = String(ref).split("/").pop() || "asset";
+        const body = new FormData();
+        body.append("image", new File([blob], filename, { type: blob.type || "application/octet-stream" }));
+        body.append("subfolder", "whatdreamscost");
+        const resp = await api.fetchApi("/upload/image", { method: "POST", body });
+        if (resp.status !== 200) throw new Error("HTTP " + resp.status);
+        const info = await resp.json();
+        // Use the name the server actually stored - it renames on collision.
+        map[ref] = info.subfolder ? info.subfolder + "/" + info.name : info.name;
+      } catch (err) {
+        console.error("[LTXDirector] Could not unpack asset:", ref, err);
+      }
+    }
+
+    const tl = data.timeline || data;
+    this._walkAssetRefs(tl, (obj, key) => { if (map[obj[key]]) obj[key] = map[obj[key]]; });
+    // Thumbnails point at the old /view URL, so rebuild them from the new names.
+    [tl.segments, tl.motionSegments].forEach(arr => (arr || []).forEach(s => {
+      if (s && s.imageFile) s.imageB64 = this._viewUrlFor(s.imageFile);
+    }));
+
+    delete data.packed;
+    delete data.packedVersion;
+    return JSON.stringify(data);
+  }
+
+  async handleSaveTimelinePacked(lossless) {
+    const btnLabel = (t) => { if (this._packedBtn) this._packedBtn.textContent = t; };
+    btnLabel("Packing...");
+    let result;
+    try {
+      result = await this._getPackedPayload(btnLabel, lossless);
+    } catch (e) {
+      console.error("Failed to pack timeline:", e);
+      alert("Failed to pack timeline. See console for details.");
+      btnLabel("Save Packed");
+      return;
+    }
+    btnLabel("Save Packed");
+
+    if (result.count < result.total) {
+      const missing = result.total - result.count;
+      if (!confirm(`${missing} of ${result.total} file(s) could not be read from the input folder and will be missing from the packed timeline.\n\nSave anyway?`)) return;
+    }
+
+    try {
+      if (window.showSaveFilePicker) {
+        const fileHandle = await window.showSaveFilePicker({
+          suggestedName: lossless ? "timeline_packed_lossless.json" : "timeline_packed.json",
+          types: [{ description: 'Packed Timeline JSON', accept: { 'application/json': ['.json'] } }]
+        });
+        const writable = await fileHandle.createWritable();
+        await writable.write(result.json);
+        await writable.close();
+      } else {
+        const blob = new Blob([result.json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "timeline_packed.json";
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+      this.dismissSettingsMenu();
+    } catch (e) {
+      if (e.name !== "AbortError") {
+        console.error("Failed to save packed timeline:", e);
+        alert("Failed to save packed timeline. See console for details.");
+      }
+    }
+  }
+
   _makeSettingRow(label, inputEl) {
     const row = document.createElement("div");
     row.className = "prcs-settings-row";
@@ -11593,6 +11778,16 @@ class TimelineEditor {
     gridContainer.appendChild(toggleBtn);
 
     menu.appendChild(gridContainer);
+
+    const btnPacked = document.createElement("button");
+    btnPacked.className = "prcs-settings-btn";
+    btnPacked.textContent = "Save Packed";
+    btnPacked.title = "Save the timeline with every image, sheet, video and audio file embedded, so it opens on someone else\u2019s machine. Images are re-encoded to JPEG to keep the file small \u2014 hold Shift for lossless.";
+    btnPacked.style.width = "100%";
+    btnPacked.style.marginTop = "6px";
+    this._packedBtn = btnPacked;
+    btnPacked.addEventListener("click", (e) => this.handleSaveTimelinePacked(!!e.shiftKey));
+    menu.appendChild(btnPacked);
 
     const div2 = document.createElement("hr");
     div2.className = "prcs-settings-divider";
